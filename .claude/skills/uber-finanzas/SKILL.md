@@ -90,6 +90,7 @@ Mientras el paso de configuración inicial no esté completo (tabla en `referenc
 | Semáforo del mes | `src/financeCalc.ts` |
 | Tipos de mantenimiento y documentos, intervalos, vencimientos, avisos | `src/fleet.ts` |
 | Config del carro activo, ganancia real, pico y placa, DIAN | `src/vehicleCalc.ts` |
+| Arriendo: saldo, mora, km, cuánto deja o cuesta el carro | `src/rental.ts` (cálculos), `components/RentalSection.tsx`, `components/VehicleEconomics.tsx` |
 | Moneda y fechas | `src/format.ts` |
 | Recordatorios de jornada y avisos de carros | `src/notifications.ts` |
 | OTA al arrancar, chequeo de APK nuevo, etiqueta de versión | `src/updates.ts` |

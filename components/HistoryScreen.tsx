@@ -25,8 +25,10 @@ export default function HistoryScreen() {
   const totalExpense = summaries.reduce((s, d) => s + d.expense, 0);
   const totalNet     = totalIncome - totalExpense;
 
+  // Mejor día de trabajo: sin contar el arriendo del carro que se cobró ese día
+  const workNet = (d: DailySummary) => d.net - d.rent;
   const bestDay = summaries.length
-    ? summaries.reduce((best, d) => d.net > best.net ? d : best, summaries[0])
+    ? summaries.reduce((best, d) => workNet(d) > workNet(best) ? d : best, summaries[0])
     : null;
 
   return (
@@ -70,10 +72,10 @@ export default function HistoryScreen() {
           </View>
         </View>
 
-        {bestDay && bestDay.net > 0 && (
+        {bestDay && workNet(bestDay) > 0 && (
           <View style={s.bestDay}>
             <Text style={s.bestDayText}>
-              🏆 Mejor día: {formatShortDate(bestDay.date)} — {formatCurrency(bestDay.net)} neto
+              🏆 Mejor día: {formatShortDate(bestDay.date)} — {formatCurrency(workNet(bestDay))} neto
             </Text>
           </View>
         )}

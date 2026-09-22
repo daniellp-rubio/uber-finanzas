@@ -27,7 +27,11 @@ components/
   BalanceScreen.tsx      Tab "Balance": estado del mes (verde/amarillo/rojo), gastos fijos, deudas, pico y placa, DIAN, config Uber (Pass / comisión)
   FundsScreen.tsx        Tab "Fondos": sobres virtuales (incluye FundActionModal y FundDetailModal internos)
   VehiclesScreen.tsx     Tab "Carros": lista → detalle (vista dentro del tab, no Modal; el botón atrás de Android vuelve).
-                         Internos: DocModal (vencimientos), PlanModal (cada cuánto), OdometerModal, SheetFrame
+                         Internos: DocModal (vencimientos), PlanModal (cada cuánto), OdometerModal
+  RentalSection.tsx      Sección "Arriendo" del detalle: estado de pagos, depósito, km, pagos.
+                         Internos: RentalFormModal (contrato), PaymentModal, EndRentalModal (devolución)
+  VehicleEconomics.tsx   "¿Cuánto te deja al mes?" (arrendado) o "Lo que te cuesta tenerlo" (propio); CostsModal (crédito + GPS)
+  SheetFrame.tsx         Marco de los modales pequeños + estilos compartidos `ms` (Carros y arriendo)
   VehicleFormModal.tsx   Alta/edición de carro (gasolina o eléctrico, con valores típicos por tipo)
   MaintenanceModal.tsx   Registro de mantenimiento; opcionalmente lo anota como gasto 🔧 Mecánico
   DateField.tsx          Fecha escrita DD/MM/AAAA con eco en palabras (sin selector nativo)
@@ -36,13 +40,15 @@ components/
   AddDebtModal.tsx       Alta de deuda (cuota mensual + meses restantes opcional)
 src/
   db.ts                  Singleton SQLite, esquema, todas las queries
-  categories.ts          Categorías de ingreso/gasto + helpers label/icon
+  categories.ts          Categorías de ingreso/gasto + helpers label/icon; RENT_CATEGORY ('rent', ingreso que crea el arriendo, oculto en el selector)
   financeCalc.ts         computeBalance(): objetivo diario y semáforo del mes
   fleet.ts               Constantes de flota (energía, valores típicos, tipos de mantenimiento, documentos) y cálculos puros
                          (próximo mantenimiento, vencimientos, avisos). No importa la DB: db.ts importa de aquí
-  vehicleCalc.ts         Config = carro activo + Uber (app_settings), ganancia real, comisión efectivo, pico y placa, DIAN, getFleetAlerts
+  rental.ts              Arriendo, puro: valores del contrato, estado de pagos (saldo, mora, día de recoger), km incluidos, cuánto deja/cuesta
+  vehicleCalc.ts         Config = carro activo + Uber (app_settings), ganancia real, comisión efectivo, pico y placa, DIAN,
+                         getVehicleAlerts / getFleetAlerts (incluyen el aviso del arriendo)
   format.ts              Moneda COP, fechas locales YYYY-MM-DD, fechas en español, DD/MM/AAAA, sumar meses/días, km
-  notifications.ts       Canal Android, permisos, jornada (8 recordatorios cada 2 h), avisos de carros (data.kind = 'vehicle')
+  notifications.ts       Canal Android, permisos, jornada (8 recordatorios cada 2 h), avisos de carros y días de pago del arriendo (data.kind = 'vehicle')
   updates.ts             (pipeline) Aplica updates OTA al arrancar; detecta APK nuevo en GitHub Releases
 assets/                  icon, adaptive-icon, splash-icon, favicon
 ```
@@ -57,17 +63,21 @@ assets/                  icon, adaptive-icon, splash-icon, favicon
 | `funds` | id, name, icon, color, balance, active | lógico (no hay UI de borrado) |
 | `fund_movements` | id, fund_id, amount (+ depósito / − retiro), note, date | nunca |
 | `app_settings` | key PK, value TEXT | `INSERT OR REPLACE` |
-| `vehicles` (v1) | id, name, plate, energy (`gasoline`/`electric`), km_per_gallon, gas_price, kwh_per_100km, kwh_price, pico_placa_days, maint_cost_per_km, odometer_km, odometer_date, active | lógico |
+| `vehicles` (v1) | id, name, plate, energy (`gasoline`/`electric`), km_per_gallon, gas_price, kwh_per_100km, kwh_price, pico_placa_days, maint_cost_per_km, odometer_km, odometer_date, active · (v2) debt_id (crédito en `debts`), extra_monthly_cost (GPS y otros, default 0) | lógico |
 | `maintenance` (v1) | id, vehicle_id, kind, date, km, cost, shop, note, transaction_id (gasto creado con él), active | lógico; borra su gasto (físico) |
 | `maintenance_plan` (v1) | id, vehicle_id, kind, every_km, every_months, active | lógico |
 | `vehicle_docs` (v1) | id, vehicle_id, kind (`soat`/`rtm`/`tax`/`insurance`), due_date, cost; UNIQUE(vehicle_id, kind) | upsert; `due_date` NULL = sin fecha |
+| `rentals` (v2) | id, vehicle_id, driver_name, driver_phone, weekly_fee, start_date, start_km, km_per_week (NULL = sin límite), extra_km_price, late_fee_per_day, deposit, end_date (NULL = vigente), deposit_returned, note, active | lógico (solo contrato sin pagos); terminar = `end_date` |
+| `rental_payments` (v2) | id, rental_id, kind (`rent`/`fee`/`deposit`), amount, date, note, transaction_id (ingreso `rent` creado con él; NULL en depósito), active | lógico; borra su ingreso (físico) |
 
-- Índices: `idx_date` sobre `transactions(date)`, `idx_maintenance_vehicle` sobre `maintenance(vehicle_id)`.
+- Índices: `idx_date` sobre `transactions(date)`, `idx_maintenance_vehicle` sobre `maintenance(vehicle_id)`, `idx_rentals_vehicle`, `idx_rental_payments_rental`.
 - Semilla: si `funds` está vacía se crean Emergencias, Mecánico, Multas/Legal, Pensión.
 - Claves de `app_settings`: `uber_commission_pct`, `uber_pass_active` (`'1'`/`'0'`, default `'1'`), `uber_pass_price_cop` (default 90000), `active_vehicle_id` (el carro que maneja el usuario). Una clave nueva no es cambio de esquema: `getSetting` devuelve el default si no existe.
 - Claves **heredadas**: `km_per_gallon`, `gas_price_cop`, `pico_placa_days_week`, `maintenance_cost_per_km`. El JS actual ya no las usa; siguen ahí para el JS viejo si hay rollback de OTA. La migración 1 las copió al carro sembrado.
 - `funds.balance` es un acumulado desnormalizado: `addFundMovement` inserta el movimiento y suma al balance (dos sentencias, sin transacción).
-- **Migraciones con `PRAGMA user_version`** (`MIGRATIONS` en `db.ts`; `runMigrations` corre al final de `initDatabase`). Versión actual: **1** (carros, mantenimientos, vencimientos; siembra "Renault Duster" con la config que el usuario tenía y lo deja como carro activo). El bloque `CREATE TABLE IF NOT EXISTS` inicial solo cubre las tablas originales.
+- **Migraciones con `PRAGMA user_version`** (`MIGRATIONS` en `db.ts`; `runMigrations` corre al final de `initDatabase`). Versión actual: **2**. El bloque `CREATE TABLE IF NOT EXISTS` inicial solo cubre las tablas originales.
+  - 1: carros, mantenimientos, vencimientos. Siembra "Renault Duster" con la config que el usuario tenía (gasolina, mantenimiento por km) y pico y placa 1, y lo deja como carro activo.
+  - 2: arriendo (`rentals`, `rental_payments`) y costos fijos por carro (`vehicles.debt_id`, `vehicles.extra_monthly_cost`, con `ALTER TABLE ADD COLUMN`).
 
 ### Cambios de esquema (obligatorio leer antes de tocar `db.ts`)
 
@@ -75,7 +85,7 @@ El celular del usuario ya tiene datos reales. Una migración mala = datos perdid
 
 1. Solo cambios **aditivos**: tabla nueva, columna nueva con `DEFAULT`, índice nuevo. Nunca `DROP`, `RENAME` ni cambiar el tipo de una columna.
 2. Agrega una función **al final** de `MIGRATIONS` en `db.ts` (`/* 2: … */ db => { … }`). Nunca edites ni reordenes una migración ya publicada: en el celular ya corrió y no vuelve a correr. Tampoco la hagas depender de constantes que puedan cambiar (la 1 escribe sus `DEFAULT` como literales). `runMigrations` ejecuta cada una en transacción junto con `PRAGMA user_version = n`.
-3. Prueba la migración contra el esquema viejo antes del PR: transpila el `db.ts` viejo (`git show main:src/db.ts`) y el nuevo con `typescript.transpileModule`, simula `expo-sqlite` sobre `node:sqlite` (Node ≥ 22) y verifica datos intactos, siembra correcta, que reabrir no duplica y que el JS viejo sigue funcionando sobre el esquema nuevo.
+3. Prueba la migración contra el esquema viejo antes del PR: transpila el `db.ts` viejo (`git show main:src/db.ts`) y el nuevo con `typescript.transpileModule`, simula `expo-sqlite` sobre `node:sqlite` (Node ≥ 22) y verifica datos intactos, siembra correcta, que reabrir no duplica y que el JS viejo sigue funcionando sobre el esquema nuevo. Si hay versiones intermedias sin publicar (p. ej. la 1), prueba también el salto desde ellas y su JS sobre el esquema nuevo.
 4. Un update OTA puede revertirse (rollback) a JS viejo: el JS viejo debe seguir funcionando con el esquema nuevo. Por eso solo cambios aditivos y columnas nullable o con default.
 
 ## Convenciones de código (imitarlas)
@@ -114,11 +124,22 @@ El celular del usuario ya tiene datos reales. Una migración mala = datos perdid
   - Uber Pass por día trabajado (`calcUberPassPerWorkDay`) = valor × 2 / (7 − días de pico y placa del carro activo). Duster en Medellín: 180.000 / 6 = 30.000; eléctrico sin pico y placa: 180.000 / 7 ≈ 25.714.
   - Sin Uber Pass: la comisión Uber (%) reemplaza la línea de Uber Pass.
 - **Efectivo** (solo sin Uber Pass): al guardar un ingreso en efectivo se crea también un gasto `other` por la comisión Uber (`Comisión Uber en efectivo (X%)`). Con Uber Pass el interruptor de efectivo no se muestra.
-- **Pico y placa**: del carro activo. Días bloqueados = días/semana × (días del mes / 7); pérdida = días bloqueados × promedio diario. Con 0 días (eléctrico), Balance dice que el carro no tiene pico y placa.
-- **Mantenimiento** (`fleet.ts`): cada `maintenance_plan` dice cada cuánto (km y/o meses; lo que pase primero). Próximo = último registro de ese tipo + intervalo. Amarillo a ≤ 30 días o ≤ 1.000 km; rojo si se pasó. Sin registro = "Registra el último que le hiciste" (sin aviso). Un carro nuevo trae plan: gasolina 10.000 km / 12 meses (Renault), eléctrico 12.000 km / 12 meses (BYD Colombia; el manual dice 20.000, se usa el menor para cuidar la garantía).
+- **Pico y placa**: del carro activo. Días bloqueados = días/semana × (días del mes / 7); pérdida = días bloqueados × promedio diario. Con 0 días (eléctrico), Balance dice que el carro no tiene pico y placa. Duster en Medellín: 1 día (decisión de Dafel, 2026-09-22).
+- **Mantenimiento** (`fleet.ts`): cada `maintenance_plan` dice cada cuánto (km y/o meses; lo que pase primero). Próximo = último registro de ese tipo + intervalo. Amarillo a ≤ 30 días o ≤ 1.000 km; rojo si se pasó. Sin registro = "Registra el último que le hiciste" (sin aviso). Un carro nuevo trae plan: gasolina 10.000 km / 12 meses (Renault), eléctrico 12.000 km / 12 meses (plan del concesionario BYD-Motorysa, que manda para la garantía; el manual dice 20.000, se usa el menor). Mantenimiento por km típico: gasolina 80, eléctrico 150 (servicio + alineación + llantas; ver deuda #5).
 - **Kilometraje**: `odometer_km` se actualiza a mano (tab Carros) o al registrar un mantenimiento con más km. Si hay planes por km y el dato tiene más de 15 días, sale el aviso "actualiza el kilometraje".
 - **Vencimientos**: SOAT, técnico-mecánica, impuesto, seguro. Amarillo a ≤ 30 días, rojo vencido. `cost` es opcional (servirá para el costo anual en la fase de arriendo).
 - **Avisos**: `getFleetAlerts()` junta los de todos los carros (rojos primero); Hoy muestra los 2 primeros y lleva a Carros. Notificaciones (`refreshVehicleReminders`, al arrancar y tras cada cambio en Carros): vencimientos 15 días antes y el día anterior, mantenimientos por fecha 7 días antes, a las 9:00. Los mantenimientos por km solo avisan dentro de la app.
+- **Arriendo** (`rental.ts`, contrato recomendado investigado en 2026-09: $600.000/semana, depósito $1.200.000, 1.200 km/semana, $250 por km extra, mora $30.000/día):
+  - Cuota **prepagada** cada 7 días desde `start_date` (día de pago = día de la semana de la entrega). Cuotas debidas a una fecha = ⌊días desde la entrega / 7⌋ + 1; con el carro devuelto se cuenta hasta el día anterior a `end_date`.
+  - Es un **saldo**, no semanas marcadas: debe = cuotas debidas × cuota − pagos `rent`. Aguanta abonos parciales y pagos adelantados. La cuota más vieja sin pagar completa = entrega + 7 × ⌊pagado / cuota⌋.
+  - Atraso: día 0 = "hoy paga" (amarillo); día 1 = gracia de 24 h (amarillo, sin mora); desde el día 2, rojo y mora = (días − 1) × mora diaria, que se muestra como sugerencia, no se suma sola. Día 3: "según el contrato ya puedes recoger el carro".
+  - Tipos de pago: `rent` (cuota) y `fee` (mora, km extra, daños) crean un ingreso `rent` 🔑 con la fecha del pago; `deposit` no crea ingreso porque se devuelve. En la devolución, lo que no se devuelve del depósito entra como `fee` + ingreso.
+  - Si el ingreso de un pago se borra desde Hoy, el pago deja de contar (`getRentalPayments` hace JOIN con `transactions`). Es la solución al huérfano de la deuda #2 para el arriendo.
+  - El ingreso `rent` no cuenta como día trabajado (`getMonthStats`), no entra a la ganancia real de Hoy ni al "mejor día" de Historial (`DailySummary.rent`). Sí suma al neto del mes (cubre la cuota del crédito que está en Deudas).
+  - Km: se compara el último kilometraje anotado con `start_km` + `km_per_week` × días / 7, en total desde la entrega (no semana a semana).
+  - Un carro arrendado no puede ser el activo ni quitarse; el activo no se puede arrendar.
+  - Aviso en Hoy/Carros (`rentalAlert`) y notificación a las 9:00 en el día de cada una de las próximas 4 cuotas sin pagar.
+- **Cuánto deja / cuánto cuesta** (`vehicleEconomics`): fijos = cuota del crédito vinculado (de `debts`, la misma de Balance: no se cuenta dos veces) + Σ costo de vencimientos con fecha / 12 + `extra_monthly_cost`. Arrendado: arriendo × 52/12 − fijos − mantenimiento estimado (km incluidos × 52/12 × COP/km del carro); también "cuando termines el crédito" = + cuota. Propio: fijos y fijos / 24 por día de trabajo. No incluye semanas quieto ni depreciación.
 - **DIAN**: constantes **2025** (UVT 49.799, umbral 1.340 UVT, deducible fijo 40 %, tarifa simplificada 19 % sobre 1.090 UVT). Orientativo; hay que actualizarlo cada año.
 - **Jornada**: `startWorkDay` cancela los recordatorios de jornada, programa una confirmación a los 5 s y 8 recordatorios cada 2 h. "Jornada activa" = hay notificaciones programadas que **no** son avisos de carro (`content.data.kind !== 'vehicle'`). No uses `cancelAllScheduledNotificationsAsync`: borraría los avisos de SOAT y mantenimiento.
 

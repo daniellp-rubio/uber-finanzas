@@ -1,8 +1,9 @@
 import * as Notifications from 'expo-notifications';
 import { Platform } from 'react-native';
-import { getVehicles, getVehicleDocs, getMaintenancePlans, getMaintenance } from './db';
+import { getVehicles, getVehicleDocs, getMaintenancePlans, getMaintenance, getCurrentRental, getRentalPayments } from './db';
 import { DOC_KINDS, planStatus, maintenanceLabel } from './fleet';
-import { addDays, formatDate, todayString } from './format';
+import { rentStatus } from './rental';
+import { addDays, formatCurrency, formatDate, todayString } from './format';
 
 const CHANNEL_ID       = 'uber-finanzas-reminders';
 const INTERVAL_HOURS   = 2;
@@ -96,7 +97,7 @@ async function cancelWorkDayNotifications(): Promise<void> {
     .map(n => Notifications.cancelScheduledNotificationAsync(n.identifier)));
 }
 
-// ── Avisos de carros (SOAT, técnico-mecánica, impuesto, seguro, mantenimiento por fecha) ──
+// ── Avisos de carros (arriendo, SOAT, técnico-mecánica, impuesto, seguro, mantenimiento por fecha) ──
 // Se reprograman todos desde cero: al abrir la app y cada vez que cambia una fecha.
 // Los mantenimientos por km no se pueden programar: salen como aviso dentro de la app.
 export async function refreshVehicleReminders(): Promise<void> {
@@ -124,6 +125,19 @@ export async function refreshVehicleReminders(): Promise<void> {
       if (!st.nextDate) continue;
       const body = `${v.name}: toca ${maintenanceLabel(plan.kind).toLowerCase()} antes del ${formatDate(st.nextDate)}.`;
       items.push({ date: addDays(st.nextDate, -7), title: '🔧 Mantenimiento en 7 días', body });
+    }
+
+    // Arriendo: el día de cada una de las próximas 4 cuotas sin pagar
+    const rental = getCurrentRental(v.id);
+    if (rental) {
+      const st = rentStatus(rental, getRentalPayments(rental.id), today);
+      for (let i = 0; st.nextDue && i < 4; i++) {
+        items.push({
+          date:  addDays(st.nextDue, 7 * i),
+          title: '🔑 Hoy paga el arriendo',
+          body:  `${rental.driver_name} (${v.name}): cuota de ${formatCurrency(rental.weekly_fee)}.`,
+        });
+      }
     }
   }
 

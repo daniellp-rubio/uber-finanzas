@@ -5,7 +5,7 @@ import {
 } from 'react-native';
 import { getTransactionsByDate, deleteTransaction, Transaction } from '../src/db';
 import { formatCurrency, formatLongDate, todayString } from '../src/format';
-import { getCategoryLabel, getCategoryIcon } from '../src/categories';
+import { getCategoryLabel, getCategoryIcon, RENT_CATEGORY } from '../src/categories';
 import {
   requestNotificationPermission, startWorkDay, endWorkDay, isWorkDayActive,
 } from '../src/notifications';
@@ -73,10 +73,13 @@ export default function TodayScreen({ onAddIncome, onAddExpense, onOpenVehicles,
       }},
     ]);
 
-  // Calculadora ganancia real
+  // Calculadora ganancia real: solo lo que se ganó manejando (el arriendo del carro no cuenta)
   const cfg = getVehicleConfig();
   const km  = Number(kmInput) || 0;
-  const real = income > 0 && km > 0 ? calcRealEarnings(income, km, cfg) : null;
+  const driveIncome = transactions
+    .filter(t => t.type === 'income' && t.category !== RENT_CATEGORY)
+    .reduce((s, t) => s + t.amount, 0);
+  const real = driveIncome > 0 && km > 0 ? calcRealEarnings(driveIncome, km, cfg) : null;
 
   return (
     <View style={s.container}>
@@ -153,7 +156,7 @@ export default function TodayScreen({ onAddIncome, onAddExpense, onOpenVehicles,
         </View>
 
         {/* ── Calculadora ganancia real ── */}
-        {income > 0 && (
+        {driveIncome > 0 && (
           <View style={s.realCard}>
             <TouchableOpacity style={s.realHeader} onPress={() => setShowRealCalc(v => !v)}>
               <Text style={s.realTitle}>🔍 ¿Cuánto gané de verdad?</Text>

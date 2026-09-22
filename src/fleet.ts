@@ -27,7 +27,7 @@ export const VEHICLE_PRESETS = {
     kwhPer100km:     17.5,   // BYD Yuan Plus, ficha técnica
     kwhPrice:        958,    // EPM residencial 2026, por encima de subsistencia
     picoPlacaDays:   0,      // eléctricos exentos en Medellín (Ley 1964/2019)
-    maintCostPerKm:  40,     // estimado: sin aceite ni filtros de motor; ajustar con facturas
+    maintCostPerKm:  150,    // servicio BYD ~48 + alineación ~14 + llantas 215/55 R18 ~73 + otros ~15 (2026-09); ajustar con facturas
   },
 };
 
@@ -59,8 +59,11 @@ export function maintenanceIcon(kind: string): string {
 }
 
 // Recordatorio que se crea con cada carro nuevo.
-// Renault: cada 10.000 km o 1 año. BYD: 12.000 km (BYD Colombia) o 1 año; el manual dice 20.000 km,
-// se usa el menor para no perder la garantía.
+// Renault: cada 10.000 km o 1 año.
+// BYD: 12.000 km o 1 año, lo que ocurra primero: es el plan del concesionario (Motorysa), que manda
+// para la garantía. El manual dice 20.000 km, así que se usa el menor. Lo que el manual pide más
+// espaciado (líquido de frenos y aceite del reductor a 40.000 km, refrigerante a 100.000 km) lo
+// hace el concesionario en el servicio que corresponda.
 export const DEFAULT_PLANS: Record<EnergyType, { kind: string; everyKm: number; everyMonths: number }[]> = {
   gasoline: [{ kind: 'service', everyKm: 10000, everyMonths: 12 }],
   electric: [{ kind: 'service', everyKm: 12000, everyMonths: 12 }],

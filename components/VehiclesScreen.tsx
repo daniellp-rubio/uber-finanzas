@@ -1,24 +1,29 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput,
-  Alert, Modal, BackHandler, KeyboardAvoidingView, Platform,
+  Alert, Modal, BackHandler,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import {
   getVehicles, getVehicle, getActiveVehicle, setActiveVehicle, deleteVehicle, updateOdometer,
   getMaintenance, getMaintenancePlans, getVehicleDocs, deleteMaintenance,
   addMaintenancePlan, updateMaintenancePlan, deleteMaintenancePlan, setVehicleDoc,
-  Vehicle, MaintenanceRecord, MaintenancePlan, VehicleDoc,
+  getCurrentRental, getRentalPayments, getDebt,
+  Vehicle, MaintenanceRecord, MaintenancePlan, VehicleDoc, Rental, RentalPayment, Debt,
 } from '../src/db';
 import {
   DOC_KINDS, MAINTENANCE_KINDS, energyIcon, energyCostPerKm, vehicleAlerts, planStatus, docStatus,
   describeDays, describePlan, maintenanceLabel, maintenanceIcon, docLabel, VehicleAlert, Level,
 } from '../src/fleet';
+import { rentStatus, rentalAlert } from '../src/rental';
+import { getVehicleAlerts } from '../src/vehicleCalc';
 import { formatCurrency, formatDate, formatKm, todayString } from '../src/format';
 import { refreshVehicleReminders, requestNotificationPermission } from '../src/notifications';
 import VehicleFormModal from './VehicleFormModal';
 import MaintenanceModal from './MaintenanceModal';
+import RentalSection from './RentalSection';
+import VehicleEconomics from './VehicleEconomics';
 import DateField from './DateField';
+import SheetFrame, { ms } from './SheetFrame';
 
 const LEVEL_COLOR: Record<Level, string> = {
   red: '#F44336', yellow: '#FFC107', ok: '#00C853', unknown: '#666',
@@ -30,17 +35,14 @@ const syncReminders = () => { refreshVehicleReminders().catch(() => {}); };
 // ─── Lista de carros ──────────────────────────────────────────────────────────
 
 export default function VehiclesScreen() {
-  const [cards, setCards]       = useState<{ v: Vehicle; alerts: VehicleAlert[] }[]>([]);
+  const [cards, setCards]       = useState<{ v: Vehicle; alerts: VehicleAlert[]; rental: Rental | null }[]>([]);
   const [activeId, setActiveId] = useState<number | null>(null);
   const [selected, setSelected] = useState<number | null>(null);
   const [showAdd, setShowAdd]   = useState(false);
 
   const load = useCallback(() => {
     const today = todayString();
-    setCards(getVehicles().map(v => ({
-      v,
-      alerts: vehicleAlerts(v, getMaintenancePlans(v.id), getMaintenance(v.id), getVehicleDocs(v.id), today),
-    })));
+    setCards(getVehicles().map(v => ({ v, alerts: getVehicleAlerts(v, today), rental: getCurrentRental(v.id) })));
     setActiveId(getActiveVehicle()?.id ?? null);
   }, []);
 
@@ -61,11 +63,11 @@ export default function VehiclesScreen() {
     <View style={s.container}>
       <View style={s.header}>
         <Text style={s.title}>Mis carros</Text>
-        <Text style={s.subtitle}>Mantenimientos, SOAT y vencimientos</Text>
+        <Text style={s.subtitle}>Mantenimientos, vencimientos y arriendo</Text>
       </View>
 
       <ScrollView contentContainerStyle={s.scroll}>
-        {cards.map(({ v, alerts }) => {
+        {cards.map(({ v, alerts, rental }) => {
           const reds    = alerts.filter(a => a.level === 'red').length;
           const yellows = alerts.length - reds;
           return (
@@ -76,6 +78,7 @@ export default function VehiclesScreen() {
                 <Text style={s.vSub}>
                   {[v.plate, v.odometer_km !== null ? `${formatKm(v.odometer_km)} km` : null].filter(Boolean).join(' · ') || 'Sin placa ni kilometraje'}
                 </Text>
+                {rental && <Text style={s.vRental}>🔑 Arrendado a {rental.driver_name}</Text>}
                 <Text style={[s.vStatus, { color: reds ? '#F44336' : yellows ? '#FFC107' : '#00C853' }]}>
                   {reds ? `🔴 ${reds} vencido${reds > 1 ? 's' : ''}` : ''}
                   {reds && yellows ? '  ·  ' : ''}
@@ -93,7 +96,7 @@ export default function VehiclesScreen() {
         <TouchableOpacity style={s.addBtn} onPress={() => setShowAdd(true)}>
           <Text style={s.addBtnTxt}>+ Agregar carro</Text>
         </TouchableOpacity>
-        <Text style={s.hint}>Toca un carro para ver sus mantenimientos y vencimientos</Text>
+        <Text style={s.hint}>Toca un carro para ver sus mantenimientos, vencimientos y arriendo</Text>
       </ScrollView>
 
       <Modal visible={showAdd} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setShowAdd(false)}>
@@ -114,6 +117,9 @@ function VehicleDetail({ vehicleId, onBack }: { vehicleId: number; onBack: () =>
   const [plans, setPlans]         = useState<MaintenancePlan[]>([]);
   const [records, setRecords]     = useState<MaintenanceRecord[]>([]);
   const [docs, setDocs]           = useState<VehicleDoc[]>([]);
+  const [rental, setRental]       = useState<Rental | null>(null);
+  const [payments, setPayments]   = useState<RentalPayment[]>([]);
+  const [debt, setDebt]           = useState<Debt | null>(null);
   const [showEdit, setShowEdit]   = useState(false);
   const [maintKind, setMaintKind] = useState<string | null>(null);  // '' = sin tipo elegido
   const [docKind, setDocKind]     = useState<string | null>(null);
@@ -121,11 +127,16 @@ function VehicleDetail({ vehicleId, onBack }: { vehicleId: number; onBack: () =>
   const [showOdo, setShowOdo]     = useState(false);
 
   const load = useCallback(() => {
-    setVehicle(getVehicle(vehicleId));
+    const v = getVehicle(vehicleId);
+    const r = getCurrentRental(vehicleId);
+    setVehicle(v);
     setIsActive(getActiveVehicle()?.id === vehicleId);
     setPlans(getMaintenancePlans(vehicleId));
     setRecords(getMaintenance(vehicleId));
     setDocs(getVehicleDocs(vehicleId));
+    setRental(r);
+    setPayments(r ? getRentalPayments(r.id) : []);
+    setDebt(v?.debt_id != null ? getDebt(v.debt_id) : null);
   }, [vehicleId]);
 
   useEffect(() => { load(); }, [load]);
@@ -134,8 +145,10 @@ function VehicleDetail({ vehicleId, onBack }: { vehicleId: number; onBack: () =>
 
   if (!vehicle) return <View style={s.container} />;
 
-  const today  = todayString();
-  const alerts = vehicleAlerts(vehicle, plans, records, docs, today);
+  const today     = todayString();
+  const rentAlert = rental ? rentalAlert(vehicle, rentStatus(rental, payments, today)) : null;
+  const alerts    = [...(rentAlert ? [rentAlert] : []), ...vehicleAlerts(vehicle, plans, records, docs, today)]
+    .sort((a, b) => (a.level === b.level ? 0 : a.level === 'red' ? -1 : 1));
 
   const handleMakeActive = () => {
     setActiveVehicle(vehicle.id);
@@ -145,6 +158,10 @@ function VehicleDetail({ vehicleId, onBack }: { vehicleId: number; onBack: () =>
   const handleDeleteVehicle = () => {
     if (isActive) {
       Alert.alert('No se puede quitar', 'Es el carro que manejas. Primero elige otro carro como el que manejas.');
+      return;
+    }
+    if (rental) {
+      Alert.alert('No se puede quitar', `Está arrendado a ${rental.driver_name}. Primero toca "Me devolvió el carro".`);
       return;
     }
     Alert.alert(`Quitar "${vehicle.name}"`, 'Se oculta el carro con sus mantenimientos. Los gastos que ya anotaste se quedan.', [
@@ -178,7 +195,7 @@ function VehicleDetail({ vehicleId, onBack }: { vehicleId: number; onBack: () =>
           <View style={s.activeBox}>
             <Text style={s.activeTxt}>✓ Lo manejas tú: la ganancia real usa este carro</Text>
           </View>
-        ) : (
+        ) : rental ? null : (
           <TouchableOpacity style={s.makeActiveBtn} onPress={handleMakeActive}>
             <Text style={s.makeActiveTxt}>🚗 Ahora manejo este carro</Text>
             <Text style={s.makeActiveSub}>La ganancia real y el pico y placa usarán sus datos</Text>
@@ -196,6 +213,10 @@ function VehicleDetail({ vehicleId, onBack }: { vehicleId: number; onBack: () =>
             ))}
           </View>
         )}
+
+        {/* ── Arriendo y cuánto deja ── */}
+        <RentalSection vehicle={vehicle} rental={rental} payments={payments} isActive={isActive} onChanged={changed} />
+        <VehicleEconomics vehicle={vehicle} docs={docs} debt={debt} rental={rental} isActive={isActive} onChanged={changed} />
 
         {/* ── Kilometraje ── */}
         <TouchableOpacity style={s.odoCard} onPress={() => setShowOdo(true)} activeOpacity={0.8}>
@@ -396,25 +417,25 @@ function DocModal({ vehicle, kind, doc, onClose, onSaved }: {
 
   return (
     <SheetFrame title={docLabel(kind)} onClose={onClose} onSave={handleSave}>
-      <Text style={s.mVehicle}>{vehicle.name}</Text>
-      <Text style={s.mLabel}>¿CUÁNDO VENCE?</Text>
+      <Text style={ms.mVehicle}>{vehicle.name}</Text>
+      <Text style={ms.mLabel}>¿CUÁNDO VENCE?</Text>
       <DateField value={date} onChange={setDate} />
-      <Text style={s.mHint}>Te avisamos 15 días antes y el día anterior, a las 9 de la mañana.</Text>
+      <Text style={ms.mHint}>Te avisamos 15 días antes y el día anterior, a las 9 de la mañana.</Text>
 
-      <Text style={s.mLabel}>¿CUÁNTO CUESTA? (opcional)</Text>
+      <Text style={ms.mLabel}>¿CUÁNTO CUESTA? (opcional)</Text>
       <TextInput
-        style={s.mInput}
+        style={ms.mInput}
         value={rawCost ? Number(rawCost).toLocaleString('es-CO') : ''}
         onChangeText={t => setRawCost(t.replace(/\D/g, ''))}
         keyboardType="number-pad"
         placeholder="$ 0"
         placeholderTextColor="#444"
       />
-      <Text style={s.mHint}>Sirve para calcular cuánto cuesta tener el carro al año.</Text>
+      <Text style={ms.mHint}>Sirve para calcular cuánto te cuesta o te deja el carro cada mes.</Text>
 
       {doc?.due_date && (
         <TouchableOpacity onPress={handleClear}>
-          <Text style={s.deleteTxt}>Quitar fecha</Text>
+          <Text style={ms.deleteTxt}>Quitar fecha</Text>
         </TouchableOpacity>
       )}
     </SheetFrame>
@@ -458,38 +479,38 @@ function PlanModal({ vehicle, plan, taken, onClose, onSaved }: {
 
   return (
     <SheetFrame title="Recordatorio" onClose={onClose} onSave={handleSave}>
-      <Text style={s.mVehicle}>{vehicle.name}</Text>
+      <Text style={ms.mVehicle}>{vehicle.name}</Text>
       {plan ? (
-        <Text style={s.mKind}>{maintenanceIcon(plan.kind)} {maintenanceLabel(plan.kind)}</Text>
+        <Text style={ms.mKind}>{maintenanceIcon(plan.kind)} {maintenanceLabel(plan.kind)}</Text>
       ) : (
         <>
-          <Text style={s.mLabel}>¿QUÉ MANTENIMIENTO?</Text>
-          <View style={s.mGrid}>
+          <Text style={ms.mLabel}>¿QUÉ MANTENIMIENTO?</Text>
+          <View style={ms.mGrid}>
             {options.map(k => (
-              <TouchableOpacity key={k.id} style={[s.mChip, kind === k.id && s.mChipOn]} onPress={() => setKind(k.id)}>
-                <Text style={[s.mChipTxt, kind === k.id && s.mChipTxtOn]}>{k.icon} {k.label}</Text>
+              <TouchableOpacity key={k.id} style={[ms.mChip, kind === k.id && ms.mChipOn]} onPress={() => setKind(k.id)}>
+                <Text style={[ms.mChipTxt, kind === k.id && ms.mChipTxtOn]}>{k.icon} {k.label}</Text>
               </TouchableOpacity>
             ))}
           </View>
         </>
       )}
 
-      <Text style={s.mLabel}>CADA CUÁNTO (lo que pase primero)</Text>
-      <View style={s.mRow}>
-        <Text style={s.mRowLabel}>Cada</Text>
-        <TextInput style={s.mSmallInput} value={km} onChangeText={t => setKm(t.replace(/\D/g, ''))} keyboardType="number-pad" placeholder="10000" placeholderTextColor="#444" />
-        <Text style={s.mRowLabel}>km</Text>
+      <Text style={ms.mLabel}>CADA CUÁNTO (lo que pase primero)</Text>
+      <View style={ms.mRow}>
+        <Text style={ms.mRowLabel}>Cada</Text>
+        <TextInput style={ms.mSmallInput} value={km} onChangeText={t => setKm(t.replace(/\D/g, ''))} keyboardType="number-pad" placeholder="10000" placeholderTextColor="#444" />
+        <Text style={ms.mRowLabel}>km</Text>
       </View>
-      <View style={s.mRow}>
-        <Text style={s.mRowLabel}>o cada</Text>
-        <TextInput style={s.mSmallInput} value={months} onChangeText={t => setMonths(t.replace(/\D/g, ''))} keyboardType="number-pad" placeholder="12" placeholderTextColor="#444" />
-        <Text style={s.mRowLabel}>meses</Text>
+      <View style={ms.mRow}>
+        <Text style={ms.mRowLabel}>o cada</Text>
+        <TextInput style={ms.mSmallInput} value={months} onChangeText={t => setMonths(t.replace(/\D/g, ''))} keyboardType="number-pad" placeholder="12" placeholderTextColor="#444" />
+        <Text style={ms.mRowLabel}>meses</Text>
       </View>
-      <Text style={s.mHint}>Usa lo que dice el manual del carro o el taller. Si el carro trabaja en plataformas, respeta el plan del concesionario para no perder la garantía.</Text>
+      <Text style={ms.mHint}>Usa lo que dice el manual del carro o el taller. Si el carro trabaja en plataformas, respeta el plan del concesionario para no perder la garantía.</Text>
 
       {plan && (
         <TouchableOpacity onPress={handleDelete}>
-          <Text style={s.deleteTxt}>Quitar recordatorio</Text>
+          <Text style={ms.deleteTxt}>Quitar recordatorio</Text>
         </TouchableOpacity>
       )}
     </SheetFrame>
@@ -520,10 +541,10 @@ function OdometerModal({ vehicle, onClose, onSaved }: { vehicle: Vehicle; onClos
 
   return (
     <SheetFrame title="Kilometraje" onClose={onClose} onSave={handleSave}>
-      <Text style={s.mVehicle}>{vehicle.name}</Text>
-      <Text style={s.mLabel}>¿CUÁNTO MARCA EL TABLERO HOY?</Text>
+      <Text style={ms.mVehicle}>{vehicle.name}</Text>
+      <Text style={ms.mLabel}>¿CUÁNTO MARCA EL TABLERO HOY?</Text>
       <TextInput
-        style={s.mBigInput}
+        style={ms.mBigInput}
         value={km ? Number(km).toLocaleString('es-CO') : ''}
         onChangeText={t => setKm(t.replace(/\D/g, ''))}
         keyboardType="number-pad"
@@ -531,36 +552,8 @@ function OdometerModal({ vehicle, onClose, onSaved }: { vehicle: Vehicle; onClos
         placeholderTextColor="#444"
         autoFocus
       />
-      <Text style={s.mHint}>Con el kilometraje al día te avisamos cuándo toca cada mantenimiento.</Text>
+      <Text style={ms.mHint}>Con el kilometraje al día te avisamos cuándo toca cada mantenimiento.</Text>
     </SheetFrame>
-  );
-}
-
-// ─── Marco común de los modales pequeños ──────────────────────────────────────
-
-function SheetFrame({ title, onClose, onSave, children }: {
-  title: string; onClose: () => void; onSave: () => void; children: React.ReactNode;
-}) {
-  return (
-    <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
-      <SafeAreaView style={s.container}>
-        <View style={s.topBar}>
-          <TouchableOpacity onPress={onClose} style={s.closeBtn}>
-            <Text style={s.closeTxt}>✕ Cancelar</Text>
-          </TouchableOpacity>
-          <Text style={s.topTitle}>{title}</Text>
-          <View style={{ width: 80 }} />
-        </View>
-        <ScrollView contentContainerStyle={s.mScroll} keyboardShouldPersistTaps="handled">
-          {children}
-        </ScrollView>
-        <View style={s.saveWrap}>
-          <TouchableOpacity style={s.saveBtn} onPress={onSave}>
-            <Text style={s.saveTxt}>GUARDAR</Text>
-          </TouchableOpacity>
-        </View>
-      </SafeAreaView>
-    </KeyboardAvoidingView>
   );
 }
 
@@ -578,6 +571,7 @@ const s = StyleSheet.create({
   vName:         { color: '#fff', fontSize: 18, fontWeight: '700' },
   vSub:          { color: '#888', fontSize: 13, marginTop: 2 },
   vStatus:       { fontSize: 13, fontWeight: '600', marginTop: 6 },
+  vRental:       { color: '#FFC107', fontSize: 13, fontWeight: '600', marginTop: 4 },
   badge:         { backgroundColor: '#0a3020', borderRadius: 10, paddingVertical: 4, paddingHorizontal: 8, borderWidth: 1, borderColor: '#00C853' },
   badgeTxt:      { color: '#00C853', fontSize: 11, fontWeight: '700' },
   addBtn:        { marginTop: 4, borderRadius: 14, borderWidth: 1.5, borderColor: '#00C853', borderStyle: 'dashed', paddingVertical: 14, alignItems: 'center' },
@@ -621,34 +615,4 @@ const s = StyleSheet.create({
   editBtn:       { marginTop: 12, borderRadius: 12, borderWidth: 1.5, borderColor: '#555', paddingVertical: 10, alignItems: 'center' },
   editBtnTxt:    { color: '#aaa', fontSize: 14, fontWeight: '600' },
   deleteTxt:     { color: '#F44336', fontSize: 14, fontWeight: '600', textAlign: 'center', paddingVertical: 14 },
-
-  // Modales pequeños
-  topBar: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    padding: 16, borderBottomColor: '#222', borderBottomWidth: 1,
-  },
-  closeBtn:      { width: 80 },
-  closeTxt:      { color: '#888', fontSize: 15 },
-  topTitle:      { color: '#fff', fontSize: 17, fontWeight: '700' },
-  mScroll:       { padding: 20, paddingBottom: 16 },
-  mVehicle:      { color: '#fff', fontSize: 22, fontWeight: '800', marginBottom: 20 },
-  mKind:         { color: '#fff', fontSize: 17, fontWeight: '700', marginBottom: 20 },
-  mLabel:        { color: '#666', fontSize: 12, letterSpacing: 1.5, marginBottom: 10 },
-  mHint:         { color: '#666', fontSize: 12, lineHeight: 18, marginBottom: 22, marginTop: -8 },
-  mInput:        { backgroundColor: '#1e1e1e', borderRadius: 14, padding: 16, color: '#fff', fontSize: 20, fontWeight: '700', marginBottom: 14 },
-  mBigInput:     { backgroundColor: '#1e1e1e', borderRadius: 14, padding: 18, color: '#fff', fontSize: 32, fontWeight: '800', marginBottom: 14 },
-  mGrid:         { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 22 },
-  mChip:         { backgroundColor: '#1e1e1e', borderRadius: 12, paddingVertical: 10, paddingHorizontal: 12 },
-  mChipOn:       { backgroundColor: '#2a1f00', borderWidth: 2, borderColor: '#FFC107' },
-  mChipTxt:      { color: '#888', fontSize: 13, fontWeight: '600' },
-  mChipTxtOn:    { color: '#fff' },
-  mRow:          { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 14 },
-  mRowLabel:     { color: '#aaa', fontSize: 16, width: 60 },
-  mSmallInput:   { backgroundColor: '#262626', borderRadius: 10, padding: 12, color: '#fff', fontSize: 18, fontWeight: '700', width: 120, textAlign: 'center' },
-  saveWrap: {
-    padding: 16, paddingBottom: 8,
-    backgroundColor: '#121212', borderTopColor: '#222', borderTopWidth: 1,
-  },
-  saveBtn:       { borderRadius: 18, height: 62, alignItems: 'center', justifyContent: 'center', backgroundColor: '#00C853' },
-  saveTxt:       { color: '#fff', fontSize: 18, fontWeight: '800', letterSpacing: 1.5 },
 });

@@ -1,5 +1,5 @@
 import * as SQLite from 'expo-sqlite';
-import type { TransactionType } from './categories';
+import { RENT_CATEGORY, TransactionType } from './categories';
 import { VEHICLE_PRESETS, DEFAULT_PLANS, EnergyType } from './fleet';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -18,6 +18,7 @@ export interface DailySummary {
   income: number;
   expense: number;
   net: number;
+  rent: number;  // parte del ingreso que es arriendo del carro (no es trabajo del día)
 }
 
 export interface FixedExpense {
@@ -66,10 +67,43 @@ export interface Vehicle {
   maint_cost_per_km: number;   // provisión de mantenimiento, COP por km
   odometer_km: number | null;  // último kilometraje conocido
   odometer_date: string | null;
+  debt_id: number | null;      // crédito del carro (fila de debts, sale en Balance)
+  extra_monthly_cost: number;  // GPS, parqueadero y otros fijos del carro, COP al mes
   active: number;
 }
 
-export type VehicleInput = Omit<Vehicle, 'id' | 'odometer_km' | 'odometer_date' | 'active'>;
+export type VehicleInput = Omit<Vehicle, 'id' | 'odometer_km' | 'odometer_date' | 'debt_id' | 'extra_monthly_cost' | 'active'>;
+
+export interface Rental {
+  id: number;
+  vehicle_id: number;
+  driver_name: string;
+  driver_phone: string | null;
+  weekly_fee: number;             // cuota prepagada cada 7 días desde start_date
+  start_date: string;
+  start_km: number | null;        // kilometraje al entregar el carro
+  km_per_week: number | null;     // km incluidos por semana (NULL = sin límite)
+  extra_km_price: number;         // COP por km de más
+  late_fee_per_day: number;       // mora por día después de la gracia
+  deposit: number;                // depósito acordado
+  end_date: string | null;        // día en que devolvió el carro (NULL = vigente)
+  deposit_returned: number | null;
+  note: string | null;
+  active: number;
+}
+
+export type RentalInput = Omit<Rental, 'id' | 'end_date' | 'deposit_returned' | 'active'>;
+
+export interface RentalPayment {
+  id: number;
+  rental_id: number;
+  kind: 'rent' | 'fee' | 'deposit';  // cuota semanal / mora, km extra o daños / depósito
+  amount: number;
+  date: string;
+  note: string | null;
+  transaction_id: number | null;     // ingreso creado con el pago (el depósito no crea ingreso)
+  active: number;
+}
 
 export interface MaintenanceRecord {
   id: number;
@@ -249,11 +283,49 @@ const MIGRATIONS: ((db: SQLite.SQLiteDatabase) => void)[] = [
       'Renault Duster',
       setting('km_per_gallon', g.kmPerGallon),
       setting('gas_price_cop', g.gasPrice),
-      setting('pico_placa_days_week', g.picoPlacaDays),
+      1,  // pico y placa en Medellín: 1 día por semana (el valor guardado podía ser el 2 viejo)
       setting('maintenance_cost_per_km', g.maintCostPerKm),
     );
     seedPlans(db, lastInsertRowId, 'gasoline');
     db.runSync('INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)', 'active_vehicle_id', String(lastInsertRowId));
+  },
+
+  /* 2: arriendo de carros y costos fijos por carro */ db => {
+    db.execSync(`
+      ALTER TABLE vehicles ADD COLUMN debt_id INTEGER;
+      ALTER TABLE vehicles ADD COLUMN extra_monthly_cost REAL NOT NULL DEFAULT 0;
+
+      CREATE TABLE IF NOT EXISTS rentals (
+        id               INTEGER PRIMARY KEY AUTOINCREMENT,
+        vehicle_id       INTEGER NOT NULL,
+        driver_name      TEXT    NOT NULL,
+        driver_phone     TEXT,
+        weekly_fee       REAL    NOT NULL,
+        start_date       TEXT    NOT NULL,
+        start_km         REAL,
+        km_per_week      REAL,
+        extra_km_price   REAL    NOT NULL DEFAULT 0,
+        late_fee_per_day REAL    NOT NULL DEFAULT 0,
+        deposit          REAL    NOT NULL DEFAULT 0,
+        end_date         TEXT,
+        deposit_returned REAL,
+        note             TEXT,
+        active           INTEGER NOT NULL DEFAULT 1
+      );
+      CREATE INDEX IF NOT EXISTS idx_rentals_vehicle ON rentals(vehicle_id);
+
+      CREATE TABLE IF NOT EXISTS rental_payments (
+        id             INTEGER PRIMARY KEY AUTOINCREMENT,
+        rental_id      INTEGER NOT NULL,
+        kind           TEXT    NOT NULL,
+        amount         REAL    NOT NULL,
+        date           TEXT    NOT NULL,
+        note           TEXT,
+        transaction_id INTEGER,
+        active         INTEGER NOT NULL DEFAULT 1
+      );
+      CREATE INDEX IF NOT EXISTS idx_rental_payments_rental ON rental_payments(rental_id);
+    `);
   },
 ];
 
@@ -291,11 +363,13 @@ export function getDailySummaries(from: string, to: string): DailySummary[] {
        date,
        SUM(CASE WHEN type='income'  THEN amount ELSE 0    END) AS income,
        SUM(CASE WHEN type='expense' THEN amount ELSE 0    END) AS expense,
-       SUM(CASE WHEN type='income'  THEN amount ELSE -amount END) AS net
+       SUM(CASE WHEN type='income'  THEN amount ELSE -amount END) AS net,
+       SUM(CASE WHEN type='income' AND category = ? THEN amount ELSE 0 END) AS rent
      FROM transactions
      WHERE date BETWEEN ? AND ?
      GROUP BY date
      ORDER BY date DESC`,
+    RENT_CATEGORY,
     from,
     to
   );
@@ -309,9 +383,10 @@ export function getMonthStats(yearMonth: string): {
        SUM(CASE WHEN type='income'  THEN amount ELSE 0    END) AS income,
        SUM(CASE WHEN type='expense' THEN amount ELSE 0    END) AS expense,
        SUM(CASE WHEN type='income'  THEN amount ELSE -amount END) AS net,
-       COUNT(DISTINCT CASE WHEN type='income' THEN date END) AS days
+       COUNT(DISTINCT CASE WHEN type='income' AND category <> ? THEN date END) AS days
      FROM transactions
      WHERE date LIKE ?`,
+    RENT_CATEGORY,  // cobrar el arriendo no es un día trabajado
     yearMonth + '-%'
   );
   return {
@@ -366,15 +441,19 @@ export function getDebts(): Debt[] {
   );
 }
 
+export function getDebt(id: number): Debt | null {
+  return getDb().getFirstSync<Debt>('SELECT * FROM debts WHERE id = ? AND active = 1', id);
+}
+
 export function addDebt(
   name: string,
   monthly_payment: number,
   months_remaining: number | null
-): void {
-  getDb().runSync(
+): number {
+  return getDb().runSync(
     'INSERT INTO debts (name, monthly_payment, months_remaining) VALUES (?, ?, ?)',
     name, monthly_payment, months_remaining
-  );
+  ).lastInsertRowId;
 }
 
 export function decrementDebtMonth(id: number, currentMonths: number | null): void {
@@ -537,13 +616,7 @@ export function addMaintenance(
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       rec.vehicle_id, rec.kind, rec.date, rec.km, rec.cost, rec.shop, rec.note, txId
     );
-    if (rec.km !== null) {
-      db.runSync(
-        `UPDATE vehicles SET odometer_km = ?, odometer_date = ?
-         WHERE id = ? AND (odometer_km IS NULL OR odometer_km < ?)`,
-        rec.km, rec.date, rec.vehicle_id, rec.km
-      );
-    }
+    if (rec.km !== null) raiseOdometer(rec.vehicle_id, rec.km, rec.date);
   });
 }
 
@@ -591,5 +664,122 @@ export function setVehicleDoc(vehicleId: number, kind: string, dueDate: string |
     `INSERT INTO vehicle_docs (vehicle_id, kind, due_date, cost) VALUES (?, ?, ?, ?)
      ON CONFLICT (vehicle_id, kind) DO UPDATE SET due_date = excluded.due_date, cost = excluded.cost`,
     vehicleId, kind, dueDate, cost
+  );
+}
+
+// ─── Costos fijos del carro (crédito vinculado + GPS y otros) ─────────────────
+
+export function setVehicleCosts(id: number, debtId: number | null, extraMonthly: number): void {
+  getDb().runSync('UPDATE vehicles SET debt_id = ?, extra_monthly_cost = ? WHERE id = ?', debtId, extraMonthly, id);
+}
+
+// ─── Arriendo ─────────────────────────────────────────────────────────────────
+
+// El contrato vigente del carro (sin fecha de devolución)
+export function getCurrentRental(vehicleId: number): Rental | null {
+  return getDb().getFirstSync<Rental>(
+    'SELECT * FROM rentals WHERE vehicle_id = ? AND active = 1 AND end_date IS NULL ORDER BY id DESC',
+    vehicleId
+  );
+}
+
+export function addRental(r: RentalInput): number {
+  const db = getDb();
+  let id = 0;
+  db.withTransactionSync(() => {
+    id = db.runSync(
+      `INSERT INTO rentals (vehicle_id, driver_name, driver_phone, weekly_fee, start_date, start_km,
+         km_per_week, extra_km_price, late_fee_per_day, deposit, note)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      r.vehicle_id, r.driver_name, r.driver_phone, r.weekly_fee, r.start_date, r.start_km,
+      r.km_per_week, r.extra_km_price, r.late_fee_per_day, r.deposit, r.note
+    ).lastInsertRowId;
+    if (r.start_km !== null) raiseOdometer(r.vehicle_id, r.start_km, r.start_date);
+  });
+  return id;
+}
+
+export function updateRental(id: number, r: RentalInput): void {
+  getDb().runSync(
+    `UPDATE rentals SET driver_name = ?, driver_phone = ?, weekly_fee = ?, start_date = ?, start_km = ?,
+       km_per_week = ?, extra_km_price = ?, late_fee_per_day = ?, deposit = ?, note = ?
+     WHERE id = ?`,
+    r.driver_name, r.driver_phone, r.weekly_fee, r.start_date, r.start_km,
+    r.km_per_week, r.extra_km_price, r.late_fee_per_day, r.deposit, r.note, id
+  );
+}
+
+// Solo para un contrato creado por error y sin pagos
+export function deleteRental(id: number): void {
+  getDb().runSync('UPDATE rentals SET active = 0 WHERE id = ?', id);
+}
+
+// Devolución del carro. Lo que se queda del depósito (multas, daños) entra como ingreso 🔑.
+export function endRental(
+  rental: Rental, vehicleName: string, endDate: string, endKm: number | null,
+  depositPaid: number, depositReturned: number,
+): void {
+  const db = getDb();
+  db.withTransactionSync(() => {
+    db.runSync('UPDATE rentals SET end_date = ?, deposit_returned = ? WHERE id = ?', endDate, depositReturned, rental.id);
+    const kept = depositPaid - depositReturned;
+    if (kept > 0) {
+      insertRentalPayment(db, rental, 'fee', kept, endDate, 'Parte del depósito que no se devolvió', `Depósito retenido · ${vehicleName}`);
+    }
+    if (endKm !== null) raiseOdometer(rental.vehicle_id, endKm, endDate);
+  });
+}
+
+// Pagos vivos del contrato. Si el ingreso se borró desde Hoy, el pago deja de contar.
+export function getRentalPayments(rentalId: number): RentalPayment[] {
+  return getDb().getAllSync<RentalPayment>(
+    `SELECT p.* FROM rental_payments p
+     LEFT JOIN transactions t ON t.id = p.transaction_id
+     WHERE p.rental_id = ? AND p.active = 1 AND (p.transaction_id IS NULL OR t.id IS NOT NULL)
+     ORDER BY p.date DESC, p.id DESC`,
+    rentalId
+  );
+}
+
+// La cuota y la mora se anotan también como ingreso 🔑 del día del pago; el depósito no (se devuelve)
+export function addRentalPayment(
+  rental: Rental, vehicleName: string, kind: RentalPayment['kind'], amount: number, date: string, note: string | null,
+): void {
+  const db = getDb();
+  db.withTransactionSync(() => {
+    const txNote = kind === 'rent' ? `Arriendo · ${vehicleName}` : kind === 'fee' ? `Mora o cobro extra · ${vehicleName}` : null;
+    insertRentalPayment(db, rental, kind, amount, date, note, txNote);
+  });
+}
+
+// Borra el pago y el ingreso que se creó con él
+export function deleteRentalPayment(p: RentalPayment): void {
+  const db = getDb();
+  db.withTransactionSync(() => {
+    db.runSync('UPDATE rental_payments SET active = 0 WHERE id = ?', p.id);
+    if (p.transaction_id !== null) db.runSync('DELETE FROM transactions WHERE id = ?', p.transaction_id);
+  });
+}
+
+function insertRentalPayment(
+  db: SQLite.SQLiteDatabase, rental: Rental, kind: RentalPayment['kind'],
+  amount: number, date: string, note: string | null, txNote: string | null,
+): void {
+  const txId = txNote === null ? null : db.runSync(
+    'INSERT INTO transactions (type, amount, category, note, date) VALUES (?, ?, ?, ?, ?)',
+    'income', amount, RENT_CATEGORY, txNote, date
+  ).lastInsertRowId;
+  db.runSync(
+    'INSERT INTO rental_payments (rental_id, kind, amount, date, note, transaction_id) VALUES (?, ?, ?, ?, ?, ?)',
+    rental.id, kind, amount, date, note, txId
+  );
+}
+
+// Sube el kilometraje del carro si el dato nuevo es mayor (nunca lo baja)
+function raiseOdometer(vehicleId: number, km: number, date: string): void {
+  getDb().runSync(
+    `UPDATE vehicles SET odometer_km = ?, odometer_date = ?
+     WHERE id = ? AND (odometer_km IS NULL OR odometer_km < ?)`,
+    km, date, vehicleId, km
   );
 }

@@ -1,8 +1,9 @@
 import {
   getSetting, setSetting, getActiveVehicle, getVehicles, getMaintenancePlans, getMaintenance,
-  getVehicleDocs,
+  getVehicleDocs, getCurrentRental, getRentalPayments, Vehicle,
 } from './db';
 import { VEHICLE_PRESETS, energyCostPerKm, vehicleAlerts, EnergyType, VehicleAlert } from './fleet';
+import { rentStatus, rentalAlert } from './rental';
 import { todayString } from './format';
 
 // ─── Defaults Uber (Colombia) ─────────────────────────────────────────────────
@@ -87,12 +88,21 @@ export function calcRealEarnings(
   };
 }
 
-// ─── Avisos de todos los carros (vencimientos y mantenimientos) ──────────────
+// ─── Avisos de todos los carros (arriendo, vencimientos y mantenimientos) ────
+
+// Avisos de un carro, incluido el pago del arriendo si está arrendado
+export function getVehicleAlerts(v: Vehicle, today = todayString()): VehicleAlert[] {
+  const alerts = vehicleAlerts(v, getMaintenancePlans(v.id), getMaintenance(v.id), getVehicleDocs(v.id), today);
+  const rental = getCurrentRental(v.id);
+  const rent   = rental ? rentalAlert(v, rentStatus(rental, getRentalPayments(rental.id), today)) : null;
+  return (rent ? [rent, ...alerts] : alerts)
+    .sort((a, b) => (a.level === b.level ? 0 : a.level === 'red' ? -1 : 1));
+}
 
 export function getFleetAlerts(): VehicleAlert[] {
   const today = todayString();
   return getVehicles()
-    .flatMap(v => vehicleAlerts(v, getMaintenancePlans(v.id), getMaintenance(v.id), getVehicleDocs(v.id), today))
+    .flatMap(v => getVehicleAlerts(v, today))
     .sort((a, b) => (a.level === b.level ? 0 : a.level === 'red' ? -1 : 1));
 }
 
