@@ -57,11 +57,15 @@ App de finanzas diarias para un conductor de Uber en Colombia: ingresos, gastos,
    gh pr checks --watch            # CI: check + release-forecast
    gh pr merge --squash --delete-branch
    git switch main && git pull --ff-only
-   gh run list --workflow release.yml -L 1     # tomar el run-id
-   gh run watch <run-id> --exit-status
    ```
-   El body del PR lleva: resumen para el usuario, cambios técnicos, plan de prueba con los comandos del paso 3, pronóstico OTA/APK y la línea de atribución de Claude Code.
-   Si CI falla: corrige, push y vuelve a esperar. Si falla dos veces por la misma causa, para y reporta.
+   Luego publica según el modo (ver `references/release.md` → "Dos modos"):
+   - **Actions activo**: `gh run list --workflow release.yml -L 1` y `gh run watch <run-id> --exit-status`.
+   - **Actions bloqueado o sin `EXPO_TOKEN`**: tú corres `scripts/release.sh` desde `main` limpio. Un APK puede tardar más de 90 min en la cola de EAS: córrelo en background y espera la notificación.
+
+   El body del PR lleva: resumen para el usuario, cambios técnicos, plan de prueba con los comandos del paso 3, pronóstico OTA/APK y la línea de atribución de Claude Code. Sin CI, el pronóstico sale de `scripts/release.sh forecast`.
+   Si CI falla, mira primero la anotación del job (`gh api repos/daniellp-rubio/uber-finanzas/check-runs/<job-id>/annotations`):
+   - "account is locked due to a billing issue" no es un fallo del código. Con el paso 3 en verde, mergea y publica en modo local.
+   - Cualquier otro fallo: corrige, push y vuelve a esperar. Si falla dos veces por la misma causa, para y reporta.
 6. **Reportar a Dafel:**
    - OTA: "Publicado. Le llega a tu papá la próxima vez que abra la app (si la tiene abierta, que la cierre del todo)."
    - APK: el link fijo más el mensaje listo para WhatsApp de `references/release.md`. La app también le mostrará el aviso verde.
@@ -86,7 +90,7 @@ Mientras el paso de configuración inicial no esté completo (tabla en `referenc
 | Moneda y fechas | `src/format.ts` |
 | Recordatorios de jornada | `src/notifications.ts` |
 | OTA al arrancar, chequeo de APK nuevo, etiqueta de versión | `src/updates.ts` |
-| Pipeline | `.github/workflows/ci.yml`, `.github/workflows/release.yml`, `eas.json`, `app.json` → `updates` / `runtimeVersion` |
+| Pipeline | `scripts/release.sh` (toda la lógica), `.github/workflows/ci.yml`, `.github/workflows/release.yml`, `eas.json`, `app.json` → `updates` / `runtimeVersion` |
 
 ## Referencias (lee solo la que toque)
 

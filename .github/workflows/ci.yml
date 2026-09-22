@@ -47,15 +47,4 @@ jobs:
         if: env.EXPO_TOKEN != ''
       - name: Forecast
         if: env.EXPO_TOKEN != ''
-        run: |
-          HASH=$(eas fingerprint:generate --platform android --build-profile production --json --non-interactive | jq -r '.hash')
-          COUNT=$(eas build:list --platform android --build-profile production --status finished \
-            --fingerprint-hash "$HASH" --limit 1 --json --non-interactive | jq 'length')
-          if [ "$COUNT" -gt 0 ]; then
-            MSG="RELEASE_FORECAST=ota · Solo JavaScript: le llega solo al abrir la app."
-          else
-            MSG="RELEASE_FORECAST=apk · Cambio nativo: se construye un APK nuevo y la app mostrará el aviso para instalarlo."
-          fi
-          echo "$MSG"
-          echo "fingerprint: $HASH"
-          { echo "### $MSG"; echo; echo "fingerprint \`$HASH\`"; } >> "$GITHUB_STEP_SUMMARY"
+        run: scripts/release.sh forecast

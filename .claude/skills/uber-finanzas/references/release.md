@@ -4,11 +4,13 @@ Verificado contra la documentación oficial el 2026-09-22 (EAS, GitHub, Google P
 
 ## Cómo funciona
 
+Toda la lógica vive en `scripts/release.sh [auto|update|build|forecast]`. Los workflows solo lo llaman.
+
 ```
 PR → CI (.github/workflows/ci.yml)
        check:            npm ci · tsc · expo-doctor · expo export android
-       release-forecast: fingerprint del PR vs builds existentes → "ota" o "apk" en el summary
-merge a main → Release (.github/workflows/release.yml)
+       release-forecast: scripts/release.sh forecast → "ota" o "apk" en el summary
+merge a main → Release (.github/workflows/release.yml) → scripts/release.sh auto
        eas fingerprint:generate (android, perfil production)
        ¿hay build production "finished" con ese fingerprint?
          sí → eas update --channel production          → la app lo aplica al abrir (src/updates.ts)
@@ -23,6 +25,17 @@ merge a main → Release (.github/workflows/release.yml)
 - **Versionado**: `cli.appVersionSource = remote` + `autoIncrement` en `production`. El `versionCode` vive en EAS (se inicializó desde `app.json` = 2 → el primer build del pipeline es 3). El `versionCode` de `app.json` ya no manda. `expo.version` (1.0.0) es el nombre visible; súbelo a mano solo cuando quieras.
 - **Updates en la app**: `checkAutomatically: ON_ERROR_RECOVERY`. El chequeo normal lo hace `applyOtaUpdateIfAvailable()` al arrancar (timeouts de 4 s y 15 s; sin red sigue con lo instalado). Expo solo chequea por su cuenta después de un crash, como red de seguridad.
 - **Paths ignorados** por Release: `**/*.md`, `.claude/**`, `.github/**`. Un PR solo de docs no publica nada. Para forzar: `gh workflow run release.yml -f mode=update|build|auto`.
+
+## Dos modos de publicar (mismo script)
+
+| Modo | Cuándo | Cómo |
+|---|---|---|
+| **Actions** (preferido) | La cuenta de GitHub sin bloqueo de facturación y `EXPO_TOKEN` en los secrets | Automático al mergear. Se sigue con `gh run watch` |
+| **Local** | Actions bloqueado ("account is locked due to a billing issue") o sin token | Claude, desde `main` limpio e igual a `origin/main`: `scripts/release.sh`. Necesita `npx eas-cli login` hecho y `gh` autenticado. Un APK tarda: correrlo en background |
+
+Salvaguardas del script en local: se niega fuera de `main`, con cambios sin commitear, con `main` desfasado de `origin` o sin sesión de EAS. Imprime `RELEASE_RESULT=ota|apk` al final.
+
+Publica siempre desde un solo lugar. El fingerprint está pensado para ser igual en Windows y en Linux (`.gitattributes` fuerza LF), pero si alguna vez un merge solo de JS dispara `apk` sin razón, compara el hash que imprime el script con el del último build (`eas build:list -e production`) antes de gastar cuota.
 
 ## Qué dispara un APK nuevo (y no un OTA)
 
@@ -39,12 +52,13 @@ Antes de pedir aprobación, di cuál de los dos será. Tras abrir el PR, confír
 
 | # | Paso | Quién | Estado 2026-09-22 |
 |---|---|---|---|
-| 1 | Repo público `daniellp-rubio/uber-finanzas`, rama `main` | Claude (`gh repo create`) | pendiente de aprobación |
+| 0 | Resolver el bloqueo de facturación de GitHub (https://github.com/settings/billing). Mientras siga, Actions no corre y se publica en modo local | Dafel | **bloqueado** (visto el 2026-09-22) |
+| 1 | Repo público `daniellp-rubio/uber-finanzas`, rama `main`, solo squash, borrar rama al mergear | Claude | hecho 2026-09-22 |
 | 2 | `npx eas-cli login` en la máquina local | Dafel, en su terminal | pendiente |
 | 3 | Access token en expo.dev → Account settings → Access tokens → secret `EXPO_TOKEN` del repo | Dafel: `gh secret set EXPO_TOKEN --repo daniellp-rubio/uber-finanzas` en su terminal | pendiente |
 | 4 | Verificar llave: `npx eas-cli credentials -p android` → **una sola** keystore para `com.uberfinanzas.app`, la misma con que se firmó el APK que ya tiene el usuario (salió del perfil `preview`, versionCode ≤ 2) | Claude, con Dafel logueado | pendiente |
 | 5 | Backup de la keystore: `eas credentials` → Android → `credentials.json` → Download → guardar FUERA del repo (gestor de contraseñas) | Dafel | pendiente |
-| 6 | PR `chore/release-pipeline` → merge → Release construye build 3 | Claude | pendiente |
+| 6 | PR #1 `chore/release-pipeline` → merge → release construye build 3 | Claude | PR abierto como draft; espera los pasos 2, 4 y 5 |
 | 7 | Mandarle al usuario el link fijo UNA vez (su app vieja no tiene aviso de updates) | Dafel | pendiente |
 
 Actualiza esta tabla cuando cambie el estado.
@@ -77,6 +91,7 @@ Tiempos: un OTA tarda ~3-5 min de CI. Un APK tarda la cola de EAS (plan gratis, 
 | El APK no instala: "bloqueado por Play Protect / fuentes desconocidas" | Permiso de instalar apps de Chrome/WhatsApp | Ajustes → Apps → Chrome → Instalar apps desconocidas → permitir |
 | Release falla en `eas build` con "credentials" | `--freeze-credentials` impidió crear credenciales | Correcto que falle: revisar `eas credentials`; nunca quitar el flag para "arreglarlo" |
 | Release falla: "Not logged in" / 401 | `EXPO_TOKEN` vencido o ausente | Dafel crea otro token y lo carga con `gh secret set EXPO_TOKEN` |
+| Jobs fallan en 2 s sin logs; anotación "account is locked due to a billing issue" | Bloqueo de facturación de la cuenta de GitHub. Actions se apaga incluso en repos públicos | Publicar en modo local. Dafel lo resuelve en https://github.com/settings/billing |
 | El usuario no ve el cambio OTA | La app estaba abierta en segundo plano | Cerrarla del todo (quitarla de recientes) y abrirla |
 | Cuota: "build limit reached" | Plan gratis: 15 builds Android/mes, se reinicia el día 1 | Esperar al mes siguiente, o hacer un build local en el runner (`eas build --local`; el runner ubuntu-24.04 trae JDK 17 y Android SDK) |
 
