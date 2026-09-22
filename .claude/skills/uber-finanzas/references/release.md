@@ -59,7 +59,7 @@ Antes de pedir aprobación, di cuál de los dos será. Tras abrir el PR, confír
 | 2 | `npx eas-cli login` en la máquina local | Dafel, en su terminal | hecho 2026-09-22 (cuenta daniellp-rubio) |
 | 3 | *(Solo modo Actions)* Access token en expo.dev → Account settings → Access tokens → secret `EXPO_TOKEN` del repo | Dafel: `gh secret set EXPO_TOKEN --repo daniellp-rubio/uber-finanzas` en su terminal | hecho 2026-09-22; probado: `release-forecast` corrió en CI con el token |
 | 4 | Verificar llave: `npx eas-cli credentials -p android` → **una sola** keystore para `com.uberfinanzas.app`, la misma con que se firmó el APK que ya tiene el usuario (salió del perfil `preview`, versionCode ≤ 2) | Claude, con Dafel logueado | hecho 2026-09-22: 1 keystore JKS default, SHA-256 `c4ac4463…eeed814`, creada 2026-05-14 03:36 UTC con el primer build y nunca modificada; los 3 APK `preview` son posteriores. Los artefactos de mayo ya expiraron (404), así que no se pudo leer la firma del APK instalado directamente |
-| 5 | Backup de la keystore: `eas credentials` → Android → `credentials.json` → Download → guardar FUERA del repo (gestor de contraseñas) | Dafel | pendiente |
+| 5 | Backup de la keystore: `eas credentials` → Android → `credentials.json` → Download → guardar FUERA del repo (gestor de contraseñas) | Dafel | hecho 2026-09-22 (según Dafel) |
 | 6 | PR #1 `chore/release-pipeline` → merge → release construye build 3 | Claude | CI en verde; pronóstico en CI = apk (fingerprint `a09fcc7a…`). Al mergear, `release.yml` construye el build 3 solo |
 | 7 | Mandarle al usuario el link fijo UNA vez (su app vieja no tiene aviso de updates) | Dafel | pendiente |
 
