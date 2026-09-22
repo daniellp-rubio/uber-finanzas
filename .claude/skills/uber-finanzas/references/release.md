@@ -30,8 +30,10 @@ merge a main → Release (.github/workflows/release.yml) → scripts/release.sh 
 
 | Modo | Cuándo | Cómo |
 |---|---|---|
-| **Local** (default) | Siempre funciona y cuesta $0. Las funcionalidades se piden en una sesión de Claude, así que ahí mismo se publica | Claude, desde `main` limpio e igual a `origin/main`: `scripts/release.sh`. Necesita `npx eas-cli login` hecho y `gh` autenticado. Un APK tarda: correrlo en background |
-| **Actions** (opcional) | Solo si la cuenta de GitHub sale del bloqueo de facturación **sin pagar** y hay `EXPO_TOKEN` en los secrets | Automático al mergear. Se sigue con `gh run watch` |
+| **Actions** (default desde 2026-09-22) | Siempre que Actions arranque. Es gratis en repo público y `EXPO_TOKEN` está en los secrets | Automático al mergear a `main`. Se sigue con `gh run list --workflow release.yml -L 1` y `gh run watch <id> --exit-status` |
+| **Local** (respaldo) | Solo si `release.yml` no arrancó (por ejemplo, vuelve el bloqueo de facturación) o falló por infraestructura, no por código | Claude, desde `main` limpio e igual a `origin/main`: `scripts/release.sh`. Necesita `npx eas-cli login` hecho y `gh` autenticado. Un APK tarda: correrlo en background |
+
+**Nunca los dos para el mismo merge.** Si `release.yml` ya corrió o sigue corriendo, correr el script local construye otro APK y gasta cuota dos veces.
 
 Salvaguardas del script en local: se niega fuera de `main`, con cambios sin commitear, con `main` desfasado de `origin` o sin sesión de EAS. Imprime `RELEASE_RESULT=ota|apk` al final.
 
@@ -52,13 +54,13 @@ Antes de pedir aprobación, di cuál de los dos será. Tras abrir el PR, confír
 
 | # | Paso | Quién | Estado 2026-09-22 |
 |---|---|---|---|
-| 0 | *(Opcional)* Bloqueo de facturación de GitHub. **No pagar ni agregar tarjeta.** Vía gratis: ticket en https://support.github.com pidiendo quitar el flag de billing. Sin esto se publica en modo local, que cubre todo el flujo | Dafel | bloqueado (re-verificado 2026-09-22); no bloquea nada |
+| 0 | Bloqueo de facturación de GitHub. Causa: la tarjeta guardada falló la retención de autorización ("authorization hold failed"). Sin deuda: plan Free, $0 de uso | Dafel | resuelto 2026-09-22: Dafel puso otra tarjeta; Claude creó el tope de Sandbox y dejó **6 topes en $0 con Stop usage** (Actions, Codespaces, Packages, Git LFS, AI credits, Sandbox). CI re-corrido en verde (run 35761386049) |
 | 1 | Repo público `daniellp-rubio/uber-finanzas`, rama `main`, solo squash, borrar rama al mergear | Claude | hecho 2026-09-22 |
 | 2 | `npx eas-cli login` en la máquina local | Dafel, en su terminal | hecho 2026-09-22 (cuenta daniellp-rubio) |
-| 3 | *(Solo modo Actions)* Access token en expo.dev → Account settings → Access tokens → secret `EXPO_TOKEN` del repo | Dafel: `gh secret set EXPO_TOKEN --repo daniellp-rubio/uber-finanzas` en su terminal | hecho 2026-09-22 (se usará cuando se desbloquee Actions) |
+| 3 | *(Solo modo Actions)* Access token en expo.dev → Account settings → Access tokens → secret `EXPO_TOKEN` del repo | Dafel: `gh secret set EXPO_TOKEN --repo daniellp-rubio/uber-finanzas` en su terminal | hecho 2026-09-22; probado: `release-forecast` corrió en CI con el token |
 | 4 | Verificar llave: `npx eas-cli credentials -p android` → **una sola** keystore para `com.uberfinanzas.app`, la misma con que se firmó el APK que ya tiene el usuario (salió del perfil `preview`, versionCode ≤ 2) | Claude, con Dafel logueado | hecho 2026-09-22: 1 keystore JKS default, SHA-256 `c4ac4463…eeed814`, creada 2026-05-14 03:36 UTC con el primer build y nunca modificada; los 3 APK `preview` son posteriores. Los artefactos de mayo ya expiraron (404), así que no se pudo leer la firma del APK instalado directamente |
 | 5 | Backup de la keystore: `eas credentials` → Android → `credentials.json` → Download → guardar FUERA del repo (gestor de contraseñas) | Dafel | pendiente |
-| 6 | PR #1 `chore/release-pipeline` → merge → release construye build 3 | Claude | listo para mergear; pronóstico local = apk (fingerprint `a09fcc7a…`) |
+| 6 | PR #1 `chore/release-pipeline` → merge → release construye build 3 | Claude | CI en verde; pronóstico en CI = apk (fingerprint `a09fcc7a…`). Al mergear, `release.yml` construye el build 3 solo |
 | 7 | Mandarle al usuario el link fijo UNA vez (su app vieja no tiene aviso de updates) | Dafel | pendiente |
 
 Actualiza esta tabla cuando cambie el estado.
@@ -91,7 +93,7 @@ Tiempos: un OTA tarda ~3-5 min de CI. Un APK tarda la cola de EAS (plan gratis, 
 | El APK no instala: "bloqueado por Play Protect / fuentes desconocidas" | Permiso de instalar apps de Chrome/WhatsApp | Ajustes → Apps → Chrome → Instalar apps desconocidas → permitir |
 | Release falla en `eas build` con "credentials" | `--freeze-credentials` impidió crear credenciales | Correcto que falle: revisar `eas credentials`; nunca quitar el flag para "arreglarlo" |
 | Release falla: "Not logged in" / 401 | `EXPO_TOKEN` vencido o ausente | Dafel crea otro token y lo carga con `gh secret set EXPO_TOKEN` |
-| Jobs fallan en 2 s sin logs; anotación "account is locked due to a billing issue" | Bloqueo de facturación de la cuenta de GitHub. Actions se apaga incluso en repos públicos | Publicar en modo local. Dafel lo resuelve en https://github.com/settings/billing |
+| Jobs fallan en 2 s sin logs; anotación "account is locked due to a billing issue" | Bloqueo de facturación de la cuenta de GitHub. Actions se apaga incluso en repos públicos. En 2026-09-22 fue una tarjeta que falló la retención de autorización | Publicar en modo local. Revisar el aviso en https://github.com/settings/billing/payment_information; Dafel cambia la tarjeta. Nunca pagar ni subir los topes |
 | El usuario no ve el cambio OTA | La app estaba abierta en segundo plano | Cerrarla del todo (quitarla de recientes) y abrirla |
 | Cuota: "build limit reached" | Plan gratis: 15 builds Android/mes, se reinicia el día 1 | Esperar al mes siguiente, o hacer un build local en el runner (`eas build --local`; el runner ubuntu-24.04 trae JDK 17 y Android SDK) |
 
@@ -100,7 +102,8 @@ Tiempos: un OTA tarda ~3-5 min de CI. Un APK tarda la cola de EAS (plan gratis, 
 | Servicio | Uso | Costo | Por qué no cobra |
 |---|---|---|---|
 | GitHub repo público + Releases | Código y link fijo del APK | $0 | Gratis en repos públicos |
-| GitHub Actions | CI/release (opcional) | $0 | "Free for public repositories that use standard GitHub-hosted runners" (docs.github.com). Hoy está bloqueado por la cuenta, no por costo |
+| GitHub Actions | CI y release | $0 | "Free for public repositories that use standard GitHub-hosted runners" (docs.github.com) |
+| Tarjeta en GitHub | Solo para quitar el bloqueo de Actions | $0 | 6 topes en $0 con "Stop usage" cubren todo lo que se cobra por consumo. La retención de autorización no es un cobro. Lo único que un tope no frena es un plan o una prueba gratis que se active a mano |
 | EAS Build (plan Free) | APK | $0 | "Free plan accounts do not incur overage charges": al agotar los 15 builds se bloquea hasta el día 1, no cobra (docs.expo.dev/billing/faq) |
 | EAS Update (plan Free) | OTA | $0 | Límite de 1.000 usuarios/mes; hay 1 |
 | Build local (`eas build --local`) | Plan B si se agota la cuota | $0 | Corre en la máquina o el runner |
@@ -108,7 +111,13 @@ Tiempos: un OTA tarda ~3-5 min de CI. Un APK tarda la cola de EAS (plan gratis, 
 | ~~Google Play~~ | — | US$25 | **Descartado** |
 | ~~Apple / iOS~~ | — | US$99/año | **Descartado** (el usuario usa Android) |
 
-Nunca subas el plan de Expo ni agregues método de pago en Expo o en GitHub. Si una necesidad nueva solo se resuelve pagando, para y consulta.
+Reglas para seguir en $0:
+- **Expo:** nunca subir de plan ni agregar método de pago.
+- **GitHub:** la tarjeta existe solo para desbloquear Actions (decisión de Dafel, 2026-09-22).
+  - Nunca subir ni borrar los 6 topes en $0 de https://github.com/settings/billing/budgets.
+  - Nunca aceptar una prueba gratis ni un "Upgrade" (Copilot Pro, GitHub Pro). Con tarjeta guardada, la prueba pasa sola a pago.
+  - Si GitHub agrega un producto nuevo que se cobra por consumo, crearle su tope en $0: sin tope, el uso es ilimitado.
+- Si una necesidad nueva solo se resuelve pagando, para y consulta.
 
 ## Cuotas y límites (plan gratis EAS)
 
