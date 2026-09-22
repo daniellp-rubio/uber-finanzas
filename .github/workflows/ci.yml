@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Typecheck
+        run: npx tsc --noEmit
+      - name: Expo doctor
+        run: npx expo-doctor
+      - name: Bundle Android (lo mismo que empaqueta un update OTA)
+        run: npx expo export --platform android --output-dir dist
+
+  # Pronóstico: ¿este PR llegará como update OTA o exigirá un APK nuevo?
+  release-forecast:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - uses: expo/expo-github-action@v8
+        if: env.EXPO_TOKEN != ''
+        with:
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+      - run: npm ci
+        if: env.EXPO_TOKEN != ''
+      - name: Forecast
+        if: env.EXPO_TOKEN != ''
+        run: |
+          HASH=$(eas fingerprint:generate --platform android --build-profile production --json --non-interactive | jq -r '.hash')
+          COUNT=$(eas build:list --platform android --build-profile production --status finished \
+            --fingerprint-hash "$HASH" --limit 1 --json --non-interactive | jq 'length')
+          if [ "$COUNT" -gt 0 ]; then
+            MSG="RELEASE_FORECAST=ota · Solo JavaScript: le llega solo al abrir la app."
+          else
+            MSG="RELEASE_FORECAST=apk · Cambio nativo: se construye un APK nuevo y la app mostrará el aviso para instalarlo."
+          fi
+          echo "$MSG"
+          echo "fingerprint: $HASH"
+          { echo "### $MSG"; echo; echo "fingerprint \`$HASH\`"; } >> "$GITHUB_STEP_SUMMARY"

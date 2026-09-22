@@ -15,6 +15,7 @@ import {
   getVehicleConfig, saveVehicleConfig, calcPicoPlacaImpact, calcDIANEstimate,
   VehicleConfig,
 } from '../src/vehicleCalc';
+import { versionLabel } from '../src/updates';
 
 // ─── Category icons for fixed expenses ───────────────────────────────────────
 const CAT_ICONS: Record<string, string> = {
@@ -368,6 +369,8 @@ export default function BalanceScreen() {
             </TouchableOpacity>
           </View>
         )}
+
+        <Text style={s.versionTxt}>{versionLabel()}</Text>
       </ScrollView>
 
       {/* ── Add Fixed Expense Modal ── */}
@@ -461,4 +464,5 @@ const s = StyleSheet.create({
   cfgInput:      { backgroundColor: '#262626', borderRadius: 10, padding: 10, color: '#fff', fontSize: 16, fontWeight: '700', width: 100, textAlign: 'center' },
   cfgSaveBtn:    { backgroundColor: '#00C853', borderRadius: 14, height: 48, alignItems: 'center', justifyContent: 'center', marginTop: 4 },
   cfgSaveTxt:    { color: '#fff', fontSize: 14, fontWeight: '800' },
+  versionTxt:    { color: '#444', fontSize: 11, textAlign: 'center', marginTop: 12 },
 });

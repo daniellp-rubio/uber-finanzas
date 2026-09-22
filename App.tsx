@@ -1,8 +1,9 @@
 import React, { useEffect, useState } from 'react';
-import { View, StyleSheet, Modal, StatusBar, TouchableOpacity, Text, ActivityIndicator } from 'react-native';
+import { View, StyleSheet, Modal, StatusBar, TouchableOpacity, Text, ActivityIndicator, Linking } from 'react-native';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { initDatabase } from './src/db';
 import { setupNotifications } from './src/notifications';
+import { applyOtaUpdateIfAvailable, isNewApkAvailable, APK_URL } from './src/updates';
 import TodayScreen from './components/TodayScreen';
 import HistoryScreen from './components/HistoryScreen';
 import BalanceScreen from './components/BalanceScreen';
@@ -24,13 +25,20 @@ function AppContent() {
   const [tab, setTab]                = useState<Tab>('today');
   const [modal, setModal]            = useState<TransactionType | null>(null);
   const [refreshTrigger, setRefresh] = useState(0);
+  const [newApk, setNewApk]          = useState(false);
   const insets                       = useSafeAreaInsets();
 
   useEffect(() => {
-    Promise.all([initDatabase(), setupNotifications()])
+    // Primero el update OTA (puede reiniciar la app), después la DB
+    applyOtaUpdateIfAvailable()
+      .then(() => Promise.all([initDatabase(), setupNotifications()]))
       .then(() => setReady(true))
       .catch(() => setReady(true));
   }, []);
+
+  useEffect(() => {
+    if (ready) isNewApkAvailable().then(setNewApk);
+  }, [ready]);
 
   if (!ready) {
     return (
@@ -42,6 +50,14 @@ function AppContent() {
 
   return (
     <View style={[s.root, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
+      {/* Aviso de APK nuevo */}
+      {newApk && (
+        <TouchableOpacity style={s.updateBar} onPress={() => Linking.openURL(APK_URL)} activeOpacity={0.8}>
+          <Text style={s.updateTitle}>📲 Hay una versión nueva de la app</Text>
+          <Text style={s.updateSub}>Toca aquí para descargarla e instalarla. Tus datos se conservan.</Text>
+        </TouchableOpacity>
+      )}
+
       {/* Screen */}
       <View style={s.screen}>
         {tab === 'today' && (
@@ -99,6 +115,9 @@ const s = StyleSheet.create({
   root:           { flex: 1, backgroundColor: '#121212' },
   loading:        { flex: 1, backgroundColor: '#121212', justifyContent: 'center', alignItems: 'center' },
   screen:         { flex: 1 },
+  updateBar:      { backgroundColor: '#0a3020', borderBottomColor: '#00C853', borderBottomWidth: 1, paddingVertical: 12, paddingHorizontal: 16 },
+  updateTitle:    { color: '#00C853', fontSize: 15, fontWeight: '800' },
+  updateSub:      { color: '#4caf7a', fontSize: 12, marginTop: 2 },
   tabBar: {
     flexDirection: 'row',
     backgroundColor: '#1a1a1a',

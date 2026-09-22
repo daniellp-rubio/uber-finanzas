@@ -1,0 +1,113 @@
+name: Release
+
+# Cada merge a main publica la app:
+#   - fingerprint nativo ya construido  → update OTA (llega solo al abrir la app)
+#   - fingerprint nuevo (cambio nativo) → build APK en EAS + GitHub Release "build-<versionCode>"
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**/*.md'
+      - '.claude/**'
+      - '.github/**'
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'auto = decide por fingerprint · build = forzar APK · update = forzar OTA'
+        type: choice
+        options: [auto, build, update]
+        default: auto
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180   # la cola gratis de EAS puede tardar 90+ min
+    env:
+      EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - uses: expo/expo-github-action@v8
+        with:
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+      - run: npm ci
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      - name: Fingerprint
+        id: fp
+        run: |
+          HASH=$(eas fingerprint:generate --platform android --build-profile production --json --non-interactive | jq -r '.hash')
+          echo "hash=$HASH" >> "$GITHUB_OUTPUT"
+          echo "fingerprint: $HASH"
+
+      - name: Decide OTA o APK
+        id: decide
+        run: |
+          MODE="${{ inputs.mode || 'auto' }}"
+          if [ "$MODE" = "auto" ]; then
+            COUNT=$(eas build:list --platform android --build-profile production --status finished \
+              --fingerprint-hash "${{ steps.fp.outputs.hash }}" --limit 1 --json --non-interactive | jq 'length')
+            if [ "$COUNT" -gt 0 ]; then MODE=update; else MODE=build; fi
+          fi
+          echo "mode=$MODE" >> "$GITHUB_OUTPUT"
+          echo "mode: $MODE"
+
+      - name: Update OTA
+        if: steps.decide.outputs.mode == 'update'
+        run: |
+          eas update --channel production --platform android --environment production \
+            --message "$(git log -1 --pretty=%s)" --non-interactive
+
+      - name: Build APK (EAS)
+        id: build
+        if: steps.decide.outputs.mode == 'build'
+        run: |
+          # --freeze-credentials: nunca generar una llave nueva. Otra llave = el APK no instala
+          # encima del actual y el usuario perdería sus datos si desinstala.
+          eas build --platform android --profile production --non-interactive --wait \
+            --freeze-credentials --message "$(git log -1 --pretty=%s)" --json > build.json
+          echo "url=$(jq -r '.[0].artifacts.buildUrl' build.json)"   >> "$GITHUB_OUTPUT"
+          echo "code=$(jq -r '.[0].appBuildVersion' build.json)"     >> "$GITHUB_OUTPUT"
+          echo "version=$(jq -r '.[0].appVersion' build.json)"       >> "$GITHUB_OUTPUT"
+
+      - name: GitHub Release (link fijo de descarga)
+        if: steps.decide.outputs.mode == 'build'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          test -n "${{ steps.build.outputs.url }}" && test "${{ steps.build.outputs.url }}" != "null"
+          curl -fsSL -o uber-finanzas.apk "${{ steps.build.outputs.url }}"
+          gh release create "build-${{ steps.build.outputs.code }}" uber-finanzas.apk \
+            --title "Uber Finanzas ${{ steps.build.outputs.version }} (build ${{ steps.build.outputs.code }})" \
+            --notes "Instalar: abrir https://github.com/${{ github.repository }}/releases/latest/download/uber-finanzas.apk en el celular y tocar Instalar. Se instala encima de la versión anterior; los datos se conservan. NO desinstalar la app vieja.
+
+          fingerprint: ${{ steps.fp.outputs.hash }}" \
+            --generate-notes --latest
+
+      - name: Resumen
+        if: always()
+        run: |
+          {
+            echo "### Release: ${{ steps.decide.outputs.mode }}"
+            echo "- fingerprint: \`${{ steps.fp.outputs.hash }}\`"
+            if [ "${{ steps.decide.outputs.mode }}" = "build" ]; then
+              echo "- APK: https://github.com/${{ github.repository }}/releases/latest/download/uber-finanzas.apk"
+              echo "- build: ${{ steps.build.outputs.code }}"
+            else
+              echo "- Update OTA en canal production: se aplica al abrir la app."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
