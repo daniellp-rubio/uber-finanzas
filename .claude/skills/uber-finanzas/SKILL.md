@@ -24,7 +24,8 @@ App de finanzas diarias para un conductor de Uber en Colombia: ingresos, gastos,
 4. **Repo público.** Cero secretos en el código. `EXPO_TOKEN` vive solo en los secrets de GitHub. La keystore nunca entra al repo (`*.jks` ya está ignorado).
 5. **Git:** rama desde `main` actualizado (`feat/…`, `fix/…`, `chore/…`); commits en inglés, conventional; PR siempre; `gh pr merge --squash --delete-branch`; nunca push directo ni force push a `main`.
 6. **UI para un usuario no técnico:** español de Colombia, textos cortos y concretos, botones grandes, confirmación en toda acción destructiva, pista visible para cualquier gesto (mantener presionado). Sin jerga ("sincronizar", "caché", "OTA").
-7. **Prefiere JS puro.** Una dependencia nativa o un cambio en `app.json` obliga a un APK nuevo: el usuario debe tocar el aviso e instalar, y se gasta cuota de EAS (15/mes). Si hay alternativa sin nativo, úsala; si no, avísalo antes de pedir aprobación.
+7. **Costo cero, sin excepción.** Este proyecto no tiene presupuesto. No agregues servicios, planes, dominios, tiendas ni APIs de pago, y no le pidas a Dafel tarjeta de crédito. Si la única forma de hacer algo cuesta dinero, no la ejecutes: díselo y propón la alternativa gratis (tabla "Costo" en `references/release.md`).
+8. **Prefiere JS puro.** Una dependencia nativa o un cambio en `app.json` obliga a un APK nuevo: el usuario debe tocar el aviso e instalar, y se gasta cuota de EAS (15/mes). Si hay alternativa sin nativo, úsala; si no, avísalo antes de pedir aprobación.
 
 ## Flujo: Dafel pide una funcionalidad → le llega al papá
 
@@ -59,8 +60,8 @@ App de finanzas diarias para un conductor de Uber en Colombia: ingresos, gastos,
    git switch main && git pull --ff-only
    ```
    Luego publica según el modo (ver `references/release.md` → "Dos modos"):
-   - **Actions activo**: `gh run list --workflow release.yml -L 1` y `gh run watch <run-id> --exit-status`.
-   - **Actions bloqueado o sin `EXPO_TOKEN`**: tú corres `scripts/release.sh` desde `main` limpio. Un APK puede tardar más de 90 min en la cola de EAS: córrelo en background y espera la notificación.
+   - **Local (default, $0)**: tú corres `scripts/release.sh` desde `main` limpio. Un APK puede tardar más de 90 min en la cola de EAS: córrelo en background y espera la notificación.
+   - **Actions** (solo si está desbloqueado y hay `EXPO_TOKEN`): `gh run list --workflow release.yml -L 1` y `gh run watch <run-id> --exit-status`.
 
    El body del PR lleva: resumen para el usuario, cambios técnicos, plan de prueba con los comandos del paso 3, pronóstico OTA/APK y la línea de atribución de Claude Code. Sin CI, el pronóstico sale de `scripts/release.sh forecast`.
    Si CI falla, mira primero la anotación del job (`gh api repos/daniellp-rubio/uber-finanzas/check-runs/<job-id>/annotations`):

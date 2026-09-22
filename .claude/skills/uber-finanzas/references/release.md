@@ -30,8 +30,8 @@ merge a main → Release (.github/workflows/release.yml) → scripts/release.sh 
 
 | Modo | Cuándo | Cómo |
 |---|---|---|
-| **Actions** (preferido) | La cuenta de GitHub sin bloqueo de facturación y `EXPO_TOKEN` en los secrets | Automático al mergear. Se sigue con `gh run watch` |
-| **Local** | Actions bloqueado ("account is locked due to a billing issue") o sin token | Claude, desde `main` limpio e igual a `origin/main`: `scripts/release.sh`. Necesita `npx eas-cli login` hecho y `gh` autenticado. Un APK tarda: correrlo en background |
+| **Local** (default) | Siempre funciona y cuesta $0. Las funcionalidades se piden en una sesión de Claude, así que ahí mismo se publica | Claude, desde `main` limpio e igual a `origin/main`: `scripts/release.sh`. Necesita `npx eas-cli login` hecho y `gh` autenticado. Un APK tarda: correrlo en background |
+| **Actions** (opcional) | Solo si la cuenta de GitHub sale del bloqueo de facturación **sin pagar** y hay `EXPO_TOKEN` en los secrets | Automático al mergear. Se sigue con `gh run watch` |
 
 Salvaguardas del script en local: se niega fuera de `main`, con cambios sin commitear, con `main` desfasado de `origin` o sin sesión de EAS. Imprime `RELEASE_RESULT=ota|apk` al final.
 
@@ -52,10 +52,10 @@ Antes de pedir aprobación, di cuál de los dos será. Tras abrir el PR, confír
 
 | # | Paso | Quién | Estado 2026-09-22 |
 |---|---|---|---|
-| 0 | Resolver el bloqueo de facturación de GitHub (https://github.com/settings/billing). Mientras siga, Actions no corre y se publica en modo local | Dafel | **bloqueado** (visto el 2026-09-22) |
+| 0 | *(Opcional)* Bloqueo de facturación de GitHub. **No pagar ni agregar tarjeta.** Vía gratis: ticket en https://support.github.com pidiendo quitar el flag de billing. Sin esto se publica en modo local, que cubre todo el flujo | Dafel | bloqueado (visto el 2026-09-22); no bloquea nada |
 | 1 | Repo público `daniellp-rubio/uber-finanzas`, rama `main`, solo squash, borrar rama al mergear | Claude | hecho 2026-09-22 |
 | 2 | `npx eas-cli login` en la máquina local | Dafel, en su terminal | pendiente |
-| 3 | Access token en expo.dev → Account settings → Access tokens → secret `EXPO_TOKEN` del repo | Dafel: `gh secret set EXPO_TOKEN --repo daniellp-rubio/uber-finanzas` en su terminal | pendiente |
+| 3 | *(Solo modo Actions)* Access token en expo.dev → Account settings → Access tokens → secret `EXPO_TOKEN` del repo | Dafel: `gh secret set EXPO_TOKEN --repo daniellp-rubio/uber-finanzas` en su terminal | no aplica mientras siga el paso 0 |
 | 4 | Verificar llave: `npx eas-cli credentials -p android` → **una sola** keystore para `com.uberfinanzas.app`, la misma con que se firmó el APK que ya tiene el usuario (salió del perfil `preview`, versionCode ≤ 2) | Claude, con Dafel logueado | pendiente |
 | 5 | Backup de la keystore: `eas credentials` → Android → `credentials.json` → Download → guardar FUERA del repo (gestor de contraseñas) | Dafel | pendiente |
 | 6 | PR #1 `chore/release-pipeline` → merge → release construye build 3 | Claude | PR abierto como draft; espera los pasos 2, 4 y 5 |
@@ -94,6 +94,21 @@ Tiempos: un OTA tarda ~3-5 min de CI. Un APK tarda la cola de EAS (plan gratis, 
 | Jobs fallan en 2 s sin logs; anotación "account is locked due to a billing issue" | Bloqueo de facturación de la cuenta de GitHub. Actions se apaga incluso en repos públicos | Publicar en modo local. Dafel lo resuelve en https://github.com/settings/billing |
 | El usuario no ve el cambio OTA | La app estaba abierta en segundo plano | Cerrarla del todo (quitarla de recientes) y abrirla |
 | Cuota: "build limit reached" | Plan gratis: 15 builds Android/mes, se reinicia el día 1 | Esperar al mes siguiente, o hacer un build local en el runner (`eas build --local`; el runner ubuntu-24.04 trae JDK 17 y Android SDK) |
+
+## Costo: todo en $0 (verificado 2026-09-22)
+
+| Servicio | Uso | Costo | Por qué no cobra |
+|---|---|---|---|
+| GitHub repo público + Releases | Código y link fijo del APK | $0 | Gratis en repos públicos |
+| GitHub Actions | CI/release (opcional) | $0 | "Free for public repositories that use standard GitHub-hosted runners" (docs.github.com). Hoy está bloqueado por la cuenta, no por costo |
+| EAS Build (plan Free) | APK | $0 | "Free plan accounts do not incur overage charges": al agotar los 15 builds se bloquea hasta el día 1, no cobra (docs.expo.dev/billing/faq) |
+| EAS Update (plan Free) | OTA | $0 | Límite de 1.000 usuarios/mes; hay 1 |
+| Build local (`eas build --local`) | Plan B si se agota la cuota | $0 | Corre en la máquina o el runner |
+| Cuenta Android de distribución limitada (2027) | Seguir instalando APK fuera de Play | $0 | Hasta 20 dispositivos, sin pago |
+| ~~Google Play~~ | — | US$25 | **Descartado** |
+| ~~Apple / iOS~~ | — | US$99/año | **Descartado** (el usuario usa Android) |
+
+Nunca subas el plan de Expo ni agregues método de pago en Expo o en GitHub. Si una necesidad nueva solo se resuelve pagando, para y consulta.
 
 ## Cuotas y límites (plan gratis EAS)
 
