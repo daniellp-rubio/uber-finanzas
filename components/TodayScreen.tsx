@@ -9,15 +9,17 @@ import { getCategoryLabel, getCategoryIcon } from '../src/categories';
 import {
   requestNotificationPermission, startWorkDay, endWorkDay, isWorkDayActive,
 } from '../src/notifications';
-import { getVehicleConfig, calcRealEarnings } from '../src/vehicleCalc';
+import { getVehicleConfig, calcRealEarnings, getFleetAlerts } from '../src/vehicleCalc';
+import type { VehicleAlert } from '../src/fleet';
 
 interface Props {
-  onAddIncome:   () => void;
-  onAddExpense:  () => void;
+  onAddIncome:    () => void;
+  onAddExpense:   () => void;
+  onOpenVehicles: () => void;
   refreshTrigger: number;
 }
 
-export default function TodayScreen({ onAddIncome, onAddExpense, refreshTrigger }: Props) {
+export default function TodayScreen({ onAddIncome, onAddExpense, onOpenVehicles, refreshTrigger }: Props) {
   const today = todayString();
 
   const [transactions, setTransactions]   = useState<Transaction[]>([]);
@@ -26,8 +28,12 @@ export default function TodayScreen({ onAddIncome, onAddExpense, refreshTrigger 
   const [workLoading, setWorkLoading]     = useState(true);
   const [showRealCalc, setShowRealCalc]   = useState(false);
   const [kmInput, setKmInput]             = useState('');
+  const [alerts, setAlerts]               = useState<VehicleAlert[]>([]);
 
-  const load = useCallback(() => setTransactions(getTransactionsByDate(today)), [today]);
+  const load = useCallback(() => {
+    setTransactions(getTransactionsByDate(today));
+    setAlerts(getFleetAlerts());
+  }, [today]);
 
   useEffect(() => { load(); }, [load, refreshTrigger]);
   useEffect(() => {
@@ -108,6 +114,24 @@ export default function TodayScreen({ onAddIncome, onAddExpense, refreshTrigger 
           </View>
         )}
 
+        {/* ── Avisos de los carros (SOAT, mantenimientos…) ── */}
+        {alerts.length > 0 && (
+          <TouchableOpacity
+            style={[s.alertCard, alerts[0].level === 'red' ? s.alertRed : s.alertYellow]}
+            onPress={onOpenVehicles}
+            activeOpacity={0.8}
+          >
+            {alerts.slice(0, 2).map((a, i) => (
+              <Text key={i} style={[s.alertTxt, { color: a.level === 'red' ? '#F44336' : '#FFC107' }]}>
+                {a.icon} {a.text}
+              </Text>
+            ))}
+            <Text style={s.alertMore}>
+              {alerts.length > 2 ? `+${alerts.length - 2} más · ` : ''}Toca para ver en Carros ›
+            </Text>
+          </TouchableOpacity>
+        )}
+
         {/* ── Cards resumen ── */}
         <View style={s.row}>
           <View style={[s.card, s.cardGreen]}>
@@ -138,7 +162,7 @@ export default function TodayScreen({ onAddIncome, onAddExpense, refreshTrigger 
 
             {showRealCalc && (
               <View style={s.realBody}>
-                <Text style={s.realHint}>Ingresa los km trabajados hoy para calcular tu ganancia real descontando gasolina, {cfg.uberPassActive ? 'Uber Pass' : 'comisión Uber'} y mantenimiento.</Text>
+                <Text style={s.realHint}>Ingresa los km trabajados hoy ({cfg.vehicleName}) para calcular tu ganancia real descontando {cfg.energy === 'electric' ? 'la carga' : 'gasolina'}, {cfg.uberPassActive ? 'Uber Pass' : 'comisión Uber'} y mantenimiento.</Text>
                 <View style={s.kmRow}>
                   <TextInput
                     style={s.kmInput}
@@ -169,8 +193,8 @@ export default function TodayScreen({ onAddIncome, onAddExpense, refreshTrigger 
                       </View>
                     )}
                     <View style={s.bRow}>
-                      <Text style={s.bLabel}>Gasolina ({km} km)</Text>
-                      <Text style={s.bValRed}>-{formatCurrency(real.fuelCost)}</Text>
+                      <Text style={s.bLabel}>{cfg.energy === 'electric' ? 'Carga eléctrica' : 'Gasolina'} ({km} km)</Text>
+                      <Text style={s.bValRed}>-{formatCurrency(real.energyCost)}</Text>
                     </View>
                     <View style={s.bRow}>
                       <Text style={s.bLabel}>Provisión mecánico</Text>
@@ -246,6 +270,11 @@ const s = StyleSheet.create({
   workingSub:     { color: '#4caf7a', fontSize: 11, marginTop: 2 },
   endBtn:         { backgroundColor: '#2a0a0a', borderRadius: 12, paddingVertical: 8, paddingHorizontal: 12, borderWidth: 1, borderColor: '#F44336' },
   endBtnTxt:      { color: '#F44336', fontSize: 13, fontWeight: '700' },
+  alertCard:      { borderRadius: 16, padding: 14, marginBottom: 14, borderWidth: 1 },
+  alertRed:       { backgroundColor: '#2e0a0a', borderColor: '#F44336' },
+  alertYellow:    { backgroundColor: '#1a1a00', borderColor: '#FFC10760' },
+  alertTxt:       { fontSize: 14, fontWeight: '600', lineHeight: 20, marginBottom: 4 },
+  alertMore:      { color: '#888', fontSize: 12, marginTop: 2 },
   row:            { flexDirection: 'row', gap: 12, marginBottom: 12 },
   card:           { flex: 1, borderRadius: 16, padding: 16 },
   cardGreen:      { backgroundColor: '#0a2e1a' },

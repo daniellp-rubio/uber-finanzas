@@ -1,9 +1,13 @@
 import * as Notifications from 'expo-notifications';
 import { Platform } from 'react-native';
+import { getVehicles, getVehicleDocs, getMaintenancePlans, getMaintenance } from './db';
+import { DOC_KINDS, planStatus, maintenanceLabel } from './fleet';
+import { addDays, formatDate, todayString } from './format';
 
 const CHANNEL_ID       = 'uber-finanzas-reminders';
 const INTERVAL_HOURS   = 2;
 const MAX_REMINDERS    = 8; // hasta 16 horas de jornada
+const VEHICLE_KIND     = 'vehicle'; // marca de los avisos de carros (no son de la jornada)
 
 // ── Configura cómo se muestran las notificaciones cuando la app está abierta ──
 Notifications.setNotificationHandler({
@@ -37,8 +41,8 @@ export async function requestNotificationPermission(): Promise<boolean> {
 
 // ── Iniciar jornada ───────────────────────────────────────────────────────────
 export async function startWorkDay(): Promise<void> {
-  // Cancelar notificaciones previas
-  await Notifications.cancelAllScheduledNotificationsAsync();
+  // Cancelar recordatorios previos de la jornada (los avisos de carros se quedan)
+  await cancelWorkDayNotifications();
 
   // Notificación de confirmación (5 segundos)
   await Notifications.scheduleNotificationAsync({
@@ -71,11 +75,65 @@ export async function startWorkDay(): Promise<void> {
 
 // ── Finalizar jornada ─────────────────────────────────────────────────────────
 export async function endWorkDay(): Promise<void> {
-  await Notifications.cancelAllScheduledNotificationsAsync();
+  await cancelWorkDayNotifications();
 }
 
 // ── ¿Hay jornada activa? ──────────────────────────────────────────────────────
 export async function isWorkDayActive(): Promise<boolean> {
   const scheduled = await Notifications.getAllScheduledNotificationsAsync();
-  return scheduled.length > 0;
+  return scheduled.some(n => !isVehicleReminder(n));
+}
+
+// Todo lo que no es aviso de carro es de la jornada (incluye los programados antes de existir la marca)
+function isVehicleReminder(n: Notifications.NotificationRequest): boolean {
+  return n.content.data?.kind === VEHICLE_KIND;
+}
+
+async function cancelWorkDayNotifications(): Promise<void> {
+  const scheduled = await Notifications.getAllScheduledNotificationsAsync();
+  await Promise.all(scheduled
+    .filter(n => !isVehicleReminder(n))
+    .map(n => Notifications.cancelScheduledNotificationAsync(n.identifier)));
+}
+
+// ── Avisos de carros (SOAT, técnico-mecánica, impuesto, seguro, mantenimiento por fecha) ──
+// Se reprograman todos desde cero: al abrir la app y cada vez que cambia una fecha.
+// Los mantenimientos por km no se pueden programar: salen como aviso dentro de la app.
+export async function refreshVehicleReminders(): Promise<void> {
+  const scheduled = await Notifications.getAllScheduledNotificationsAsync();
+  await Promise.all(scheduled
+    .filter(isVehicleReminder)
+    .map(n => Notifications.cancelScheduledNotificationAsync(n.identifier)));
+
+  const today = todayString();
+  const items: { date: string; title: string; body: string }[] = [];
+
+  for (const v of getVehicles()) {
+    const docs = getVehicleDocs(v.id);
+    for (const kind of DOC_KINDS) {
+      const due = docs.find(d => d.kind === kind.id)?.due_date;
+      if (!due) continue;
+      const body = `${v.name}: ${kind.label} vence el ${formatDate(due)}.`;
+      items.push({ date: addDays(due, -15), title: `${kind.icon} ${kind.label} vence en 15 días`, body });
+      items.push({ date: addDays(due, -1),  title: `${kind.icon} ${kind.label} vence mañana`,     body });
+    }
+
+    const records = getMaintenance(v.id);
+    for (const plan of getMaintenancePlans(v.id)) {
+      const st = planStatus(plan, records, v.odometer_km, today);
+      if (!st.nextDate) continue;
+      const body = `${v.name}: toca ${maintenanceLabel(plan.kind).toLowerCase()} antes del ${formatDate(st.nextDate)}.`;
+      items.push({ date: addDays(st.nextDate, -7), title: '🔧 Mantenimiento en 7 días', body });
+    }
+  }
+
+  for (const it of items) {
+    const [y, m, d] = it.date.split('-').map(Number);
+    const when = new Date(y, m - 1, d, 9, 0, 0);  // 9:00 a.m.
+    if (when.getTime() <= Date.now()) continue;
+    await Notifications.scheduleNotificationAsync({
+      content: { title: it.title, body: it.body, sound: true, data: { kind: VEHICLE_KIND } },
+      trigger: { type: Notifications.SchedulableTriggerInputTypes.DATE, date: when },
+    });
+  }
 }

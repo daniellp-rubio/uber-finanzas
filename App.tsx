@@ -2,22 +2,24 @@ import React, { useEffect, useState } from 'react';
 import { View, StyleSheet, Modal, StatusBar, TouchableOpacity, Text, ActivityIndicator, Linking } from 'react-native';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { initDatabase } from './src/db';
-import { setupNotifications } from './src/notifications';
+import { setupNotifications, refreshVehicleReminders } from './src/notifications';
 import { applyOtaUpdateIfAvailable, isNewApkAvailable, APK_URL } from './src/updates';
 import TodayScreen from './components/TodayScreen';
 import HistoryScreen from './components/HistoryScreen';
 import BalanceScreen from './components/BalanceScreen';
 import FundsScreen from './components/FundsScreen';
+import VehiclesScreen from './components/VehiclesScreen';
 import AddTransactionModal from './components/AddTransactionModal';
 import type { TransactionType } from './src/categories';
 
-type Tab = 'today' | 'history' | 'balance' | 'funds';
+type Tab = 'today' | 'history' | 'balance' | 'funds' | 'vehicles';
 
 const TABS: { id: Tab; label: string; icon: string }[] = [
   { id: 'today',   label: 'Hoy',      icon: '🏠' },
   { id: 'history', label: 'Historial', icon: '📅' },
   { id: 'balance', label: 'Balance',   icon: '💰' },
   { id: 'funds',   label: 'Fondos',    icon: '💼' },
+  { id: 'vehicles', label: 'Carros',   icon: '🚙' },
 ];
 
 function AppContent() {
@@ -37,7 +39,9 @@ function AppContent() {
   }, []);
 
   useEffect(() => {
-    if (ready) isNewApkAvailable().then(setNewApk);
+    if (!ready) return;
+    isNewApkAvailable().then(setNewApk);
+    refreshVehicleReminders().catch(() => {});  // SOAT, técnico-mecánica, etc.
   }, [ready]);
 
   if (!ready) {
@@ -65,11 +69,13 @@ function AppContent() {
             refreshTrigger={refreshTrigger}
             onAddIncome={() => setModal('income')}
             onAddExpense={() => setModal('expense')}
+            onOpenVehicles={() => setTab('vehicles')}
           />
         )}
         {tab === 'history' && <HistoryScreen />}
         {tab === 'balance' && <BalanceScreen />}
         {tab === 'funds'   && <FundsScreen />}
+        {tab === 'vehicles' && <VehiclesScreen />}
       </View>
 
       {/* Bottom Tab Bar */}

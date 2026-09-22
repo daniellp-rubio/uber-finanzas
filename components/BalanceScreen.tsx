@@ -12,7 +12,7 @@ import { formatCurrency } from '../src/format';
 import AddFixedExpenseModal from './AddFixedExpenseModal';
 import AddDebtModal from './AddDebtModal';
 import {
-  getVehicleConfig, saveVehicleConfig, calcPicoPlacaImpact, calcDIANEstimate,
+  getVehicleConfig, saveUberConfig, calcPicoPlacaImpact, calcDIANEstimate,
   VehicleConfig,
 } from '../src/vehicleCalc';
 import { versionLabel } from '../src/updates';
@@ -51,12 +51,8 @@ export default function BalanceScreen() {
   const [showDIAN, setShowDIAN]           = useState(false);
   const [cfg, setCfg]                     = useState<VehicleConfig>(getVehicleConfig());
 
-  // Config fields (editable)
-  const [cfgKm, setCfgKm]                 = useState(String(cfg.kmPerGallon));
-  const [cfgGas, setCfgGas]               = useState(String(cfg.gasPriceCOP));
+  // Config Uber (editable). Gasolina, pico y placa y mantenimiento están en cada carro (tab Carros)
   const [cfgComm, setCfgComm]             = useState(String(cfg.uberCommissionPct));
-  const [cfgPico, setCfgPico]             = useState(String(cfg.picoPlacaDaysPerWeek));
-  const [cfgMaint, setCfgMaint]           = useState(String(cfg.maintenanceCostPerKm));
   const [cfgPass, setCfgPass]             = useState(String(cfg.uberPassPriceCOP));
 
   const load = useCallback(() => {
@@ -65,25 +61,17 @@ export default function BalanceScreen() {
     setBalance(computeBalance());
     const updated = getVehicleConfig();
     setCfg(updated);
-    setCfgKm(String(updated.kmPerGallon));
-    setCfgGas(String(updated.gasPriceCOP));
     setCfgComm(String(updated.uberCommissionPct));
-    setCfgPico(String(updated.picoPlacaDaysPerWeek));
-    setCfgMaint(String(updated.maintenanceCostPerKm));
     setCfgPass(String(updated.uberPassPriceCOP));
   }, []);
 
   React.useEffect(() => { load(); }, [load]);
 
   const saveConfig = () => {
-    // La comisión sí puede ser 0; los demás campos en 0 no tienen sentido
+    // La comisión sí puede ser 0; el Uber Pass en 0 no tiene sentido
     const comm = Number(cfgComm);
-    saveVehicleConfig({
-      kmPerGallon:          Number(cfgKm)   || cfg.kmPerGallon,
-      gasPriceCOP:          Number(cfgGas)  || cfg.gasPriceCOP,
+    saveUberConfig({
       uberCommissionPct:    cfgComm.trim() !== '' && Number.isFinite(comm) ? comm : cfg.uberCommissionPct,
-      picoPlacaDaysPerWeek: Number(cfgPico) || cfg.picoPlacaDaysPerWeek,
-      maintenanceCostPerKm: Number(cfgMaint)|| cfg.maintenanceCostPerKm,
       uberPassPriceCOP:     Number(cfgPass) || cfg.uberPassPriceCOP,
     });
     load();
@@ -92,7 +80,7 @@ export default function BalanceScreen() {
 
   // Se guarda al tocar, sin pasar por "Guardar configuración"
   const toggleUberPass = () => {
-    saveVehicleConfig({ uberPassActive: !cfg.uberPassActive });
+    saveUberConfig({ uberPassActive: !cfg.uberPassActive });
     setCfg(getVehicleConfig());
   };
 
@@ -289,6 +277,16 @@ export default function BalanceScreen() {
 
         {/* ── Pico y Placa ── */}
         {(() => {
+          if (cfg.picoPlacaDaysPerWeek === 0) {
+            return (
+              <View style={s.section}>
+                <Text style={s.sectionTitle}>🚫 PICO Y PLACA</Text>
+                <Text style={[s.ppDays, { color: '#00C853', marginTop: 10, marginBottom: 0 }]}>
+                  ✓ {cfg.vehicleName} no tiene pico y placa: puedes trabajar todos los días.
+                </Text>
+              </View>
+            );
+          }
           const avgDaily = b && b.daysWorked > 0 ? b.dailyAvg : 0;
           const pp = calcPicoPlacaImpact(avgDaily, cfg);
           return (
@@ -309,7 +307,7 @@ export default function BalanceScreen() {
                 </View>
               )}
               <Text style={s.ppHint}>
-                Configurado: {cfg.picoPlacaDaysPerWeek} días/semana sin trabajar.
+                {cfg.vehicleName}: {cfg.picoPlacaDaysPerWeek} {cfg.picoPlacaDaysPerWeek === 1 ? 'día' : 'días'}/semana sin trabajar. Se cambia en 🚙 Carros.
               </Text>
             </View>
           );
@@ -352,7 +350,7 @@ export default function BalanceScreen() {
 
         {/* ── Config vehículo ── */}
         <TouchableOpacity style={s.configBtn} onPress={() => setShowConfig(v => !v)}>
-          <Text style={s.configBtnTxt}>⚙️ Configurar mi vehículo</Text>
+          <Text style={s.configBtnTxt}>⚙️ Configurar Uber</Text>
           <Text style={s.chevron}>{showConfig ? '▲' : '▼'}</Text>
         </TouchableOpacity>
 
@@ -375,13 +373,9 @@ export default function BalanceScreen() {
               <View style={[s.passDot, cfg.uberPassActive && s.passDotOn]} />
             </TouchableOpacity>
             {[
-              { label: 'Rendimiento (km/galón)',      val: cfgKm,    set: setCfgKm },
-              { label: 'Precio galón (COP)',           val: cfgGas,   set: setCfgGas },
               cfg.uberPassActive
                 ? { label: 'Valor de cada Uber Pass (COP)', val: cfgPass, set: setCfgPass }
                 : { label: 'Comisión Uber (%)',            val: cfgComm, set: setCfgComm },
-              { label: 'Días pico y placa por semana', val: cfgPico,  set: setCfgPico },
-              { label: 'Costo mantenimiento (COP/km)', val: cfgMaint, set: setCfgMaint },
             ].map(row => (
               <View key={row.label} style={s.cfgRow}>
                 <Text style={s.cfgLabel}>{row.label}</Text>
@@ -396,6 +390,9 @@ export default function BalanceScreen() {
             <TouchableOpacity style={s.cfgSaveBtn} onPress={saveConfig}>
               <Text style={s.cfgSaveTxt}>GUARDAR CONFIGURACIÓN</Text>
             </TouchableOpacity>
+            <Text style={s.cfgHint}>
+              Gasolina o carga, pico y placa y mantenimiento son de cada carro: 🚙 Carros → {cfg.vehicleName} → Editar datos.
+            </Text>
           </View>
         )}
 
@@ -502,5 +499,6 @@ const s = StyleSheet.create({
   cfgInput:      { backgroundColor: '#262626', borderRadius: 10, padding: 10, color: '#fff', fontSize: 16, fontWeight: '700', width: 100, textAlign: 'center' },
   cfgSaveBtn:    { backgroundColor: '#00C853', borderRadius: 14, height: 48, alignItems: 'center', justifyContent: 'center', marginTop: 4 },
   cfgSaveTxt:    { color: '#fff', fontSize: 14, fontWeight: '800' },
+  cfgHint:       { color: '#666', fontSize: 12, lineHeight: 18, marginTop: 12 },
   versionTxt:    { color: '#444', fontSize: 11, textAlign: 'center', marginTop: 12 },
 });

@@ -1,12 +1,14 @@
-import { getSetting, setSetting } from './db';
+import {
+  getSetting, setSetting, getActiveVehicle, getVehicles, getMaintenancePlans, getMaintenance,
+  getVehicleDocs,
+} from './db';
+import { VEHICLE_PRESETS, energyCostPerKm, vehicleAlerts, EnergyType, VehicleAlert } from './fleet';
+import { todayString } from './format';
 
-// ─── Defaults (Colombia 2025) ─────────────────────────────────────────────────
+// ─── Defaults Uber (Colombia) ─────────────────────────────────────────────────
+// Gasolina, pico y placa y mantenimiento por km son de cada carro (fleet.ts → VEHICLE_PRESETS)
 export const DEFAULTS = {
-  kmPerGallon:       35,      // rendimiento promedio colombia
-  gasPriceCOP:       15827,   // precio galon corriente 2025
   uberCommissionPct: 25,      // comision uber colombia (solo sin Uber Pass)
-  picoPlacaDaysPerWeek: 1,    // dias de restriccion medellin
-  maintenanceCostPerKm: 80,   // COP por km (mantenimiento preventivo estimado)
   uberPassActive:    true,    // Uber cobra suscripcion (Uber Pass) en vez de comision
   uberPassPriceCOP:  90000,   // valor de cada cobro de Uber Pass
   uberPassPerWeek:   2,       // cobros de Uber Pass por semana
@@ -15,33 +17,36 @@ export const DEFAULTS = {
 // ─── Settings helpers ─────────────────────────────────────────────────────────
 
 export interface VehicleConfig {
-  kmPerGallon:          number;
-  gasPriceCOP:          number;
-  uberCommissionPct:    number;
+  vehicleName:          string;
+  energy:               EnergyType;
+  energyCostPerKm:      number;   // gasolina o carga eléctrica por km
   picoPlacaDaysPerWeek: number;
   maintenanceCostPerKm: number;
+  uberCommissionPct:    number;
   uberPassActive:       boolean;
   uberPassPriceCOP:     number;
 }
 
+// Datos del carro que maneja el usuario + su configuración de Uber
 export function getVehicleConfig(): VehicleConfig {
+  const v = getActiveVehicle();
+  const g = VEHICLE_PRESETS.gasoline;
   return {
-    kmPerGallon:          Number(getSetting('km_per_gallon',          String(DEFAULTS.kmPerGallon))),
-    gasPriceCOP:          Number(getSetting('gas_price_cop',          String(DEFAULTS.gasPriceCOP))),
+    vehicleName:          v?.name ?? 'Mi carro',
+    energy:               v?.energy ?? 'gasoline',
+    energyCostPerKm:      v ? energyCostPerKm(v) : g.gasPrice / g.kmPerGallon,
+    picoPlacaDaysPerWeek: v?.pico_placa_days ?? g.picoPlacaDays,
+    maintenanceCostPerKm: v?.maint_cost_per_km ?? g.maintCostPerKm,
     uberCommissionPct:    Number(getSetting('uber_commission_pct',    String(DEFAULTS.uberCommissionPct))),
-    picoPlacaDaysPerWeek: Number(getSetting('pico_placa_days_week',   String(DEFAULTS.picoPlacaDaysPerWeek))),
-    maintenanceCostPerKm: Number(getSetting('maintenance_cost_per_km',String(DEFAULTS.maintenanceCostPerKm))),
     uberPassActive:       getSetting('uber_pass_active', DEFAULTS.uberPassActive ? '1' : '0') === '1',
     uberPassPriceCOP:     Number(getSetting('uber_pass_price_cop',    String(DEFAULTS.uberPassPriceCOP))),
   };
 }
 
-export function saveVehicleConfig(cfg: Partial<VehicleConfig>): void {
-  if (cfg.kmPerGallon          !== undefined) setSetting('km_per_gallon',           String(cfg.kmPerGallon));
-  if (cfg.gasPriceCOP          !== undefined) setSetting('gas_price_cop',           String(cfg.gasPriceCOP));
+export type UberConfig = Pick<VehicleConfig, 'uberCommissionPct' | 'uberPassActive' | 'uberPassPriceCOP'>;
+
+export function saveUberConfig(cfg: Partial<UberConfig>): void {
   if (cfg.uberCommissionPct    !== undefined) setSetting('uber_commission_pct',     String(cfg.uberCommissionPct));
-  if (cfg.picoPlacaDaysPerWeek !== undefined) setSetting('pico_placa_days_week',    String(cfg.picoPlacaDaysPerWeek));
-  if (cfg.maintenanceCostPerKm !== undefined) setSetting('maintenance_cost_per_km', String(cfg.maintenanceCostPerKm));
   if (cfg.uberPassActive       !== undefined) setSetting('uber_pass_active',        cfg.uberPassActive ? '1' : '0');
   if (cfg.uberPassPriceCOP     !== undefined) setSetting('uber_pass_price_cop',     String(cfg.uberPassPriceCOP));
 }
@@ -52,7 +57,7 @@ export interface RealEarnings {
   grossIncome:       number;  // lo que muestra Uber (bruto)
   uberCommission:    number;  // comisión Uber (0 con Uber Pass)
   uberPassDaily:     number;  // Uber Pass repartido por día trabajado (0 sin Uber Pass)
-  fuelCost:          number;  // costo gasolina
+  energyCost:        number;  // gasolina o carga eléctrica
   maintenanceCost:   number;  // provisión mantenimiento
   netReal:           number;  // lo que queda de verdad
   costPerKm:         number;  // costo total por km
@@ -65,22 +70,30 @@ export function calcRealEarnings(
 ): RealEarnings {
   const uberCommission  = cfg.uberPassActive ? 0 : grossIncome * (cfg.uberCommissionPct / 100);
   const uberPassDaily   = cfg.uberPassActive ? calcUberPassPerWorkDay(cfg) : 0;
-  const gallonsUsed     = kmDriven / cfg.kmPerGallon;
-  const fuelCost        = gallonsUsed * cfg.gasPriceCOP;
+  const energyCost      = kmDriven * cfg.energyCostPerKm;
   const maintenanceCost = kmDriven * cfg.maintenanceCostPerKm;
-  const netReal         = grossIncome - uberCommission - uberPassDaily - fuelCost - maintenanceCost;
-  const totalCost       = uberCommission + uberPassDaily + fuelCost + maintenanceCost;
+  const netReal         = grossIncome - uberCommission - uberPassDaily - energyCost - maintenanceCost;
+  const totalCost       = uberCommission + uberPassDaily + energyCost + maintenanceCost;
   const costPerKm       = kmDriven > 0 ? totalCost / kmDriven : 0;
 
   return {
     grossIncome,
     uberCommission:  Math.round(uberCommission),
     uberPassDaily,
-    fuelCost:        Math.round(fuelCost),
+    energyCost:      Math.round(energyCost),
     maintenanceCost: Math.round(maintenanceCost),
     netReal:         Math.round(netReal),
     costPerKm:       Math.round(costPerKm),
   };
+}
+
+// ─── Avisos de todos los carros (vencimientos y mantenimientos) ──────────────
+
+export function getFleetAlerts(): VehicleAlert[] {
+  const today = todayString();
+  return getVehicles()
+    .flatMap(v => vehicleAlerts(v, getMaintenancePlans(v.id), getMaintenance(v.id), getVehicleDocs(v.id), today))
+    .sort((a, b) => (a.level === b.level ? 0 : a.level === 'red' ? -1 : 1));
 }
 
 // ─── Uber Pass ────────────────────────────────────────────────────────────────

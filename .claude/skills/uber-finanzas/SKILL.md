@@ -82,14 +82,16 @@ Mientras el paso de configuración inicial no esté completo (tabla en `referenc
 | Quiero cambiar… | Archivo |
 |---|---|
 | Tabs, arranque, aviso de APK nuevo | `App.tsx` |
-| Pantalla Hoy / Historial / Balance / Fondos | `components/<X>Screen.tsx` |
+| Pantalla Hoy / Historial / Balance / Fondos / Carros | `components/<X>Screen.tsx` (Carros = `VehiclesScreen`) |
 | Alta de ingreso-gasto / gasto fijo / deuda | `components/Add*Modal.tsx` |
-| Tablas y queries | `src/db.ts` |
+| Alta de carro / mantenimiento, campo de fecha | `components/VehicleFormModal.tsx`, `MaintenanceModal.tsx`, `DateField.tsx` |
+| Tablas, queries y migraciones | `src/db.ts` |
 | Categorías | `src/categories.ts` (gastos fijos: `AddFixedExpenseModal.tsx` + `CAT_ICONS` en `BalanceScreen.tsx`) |
 | Semáforo del mes | `src/financeCalc.ts` |
-| Vehículo, ganancia real, pico y placa, DIAN | `src/vehicleCalc.ts` |
+| Tipos de mantenimiento y documentos, intervalos, vencimientos, avisos | `src/fleet.ts` |
+| Config del carro activo, ganancia real, pico y placa, DIAN | `src/vehicleCalc.ts` |
 | Moneda y fechas | `src/format.ts` |
-| Recordatorios de jornada | `src/notifications.ts` |
+| Recordatorios de jornada y avisos de carros | `src/notifications.ts` |
 | OTA al arrancar, chequeo de APK nuevo, etiqueta de versión | `src/updates.ts` |
 | Pipeline | `scripts/release.sh` (toda la lógica), `.github/workflows/ci.yml`, `.github/workflows/release.yml`, `eas.json`, `app.json` → `updates` / `runtimeVersion` |
 
