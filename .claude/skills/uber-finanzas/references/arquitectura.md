@@ -26,7 +26,7 @@ components/
   HistoryScreen.tsx      Tab "Historial": semana / mes, totales, mejor día, detalle por día
   BalanceScreen.tsx      Tab "Balance": estado del mes (verde/amarillo/rojo), gastos fijos, deudas, pico y placa, DIAN, config vehículo
   FundsScreen.tsx        Tab "Fondos": sobres virtuales (incluye FundActionModal y FundDetailModal internos)
-  AddTransactionModal.tsx  Alta de ingreso/gasto; toggle efectivo → registra comisión Uber como gasto automático
+  AddTransactionModal.tsx  Alta de ingreso/gasto; categoría Uber Pass pre-llena el monto; toggle efectivo (solo sin Uber Pass) → registra comisión Uber como gasto automático
   AddFixedExpenseModal.tsx Alta de gasto fijo mensual (categorías propias, distintas a las de transacciones)
   AddDebtModal.tsx       Alta de deuda (cuota mensual + meses restantes opcional)
 src/
@@ -53,7 +53,7 @@ assets/                  icon, adaptive-icon, splash-icon, favicon
 
 - Índice: `idx_date` sobre `transactions(date)`.
 - Semilla: si `funds` está vacía se crean Emergencias, Mecánico, Multas/Legal, Pensión.
-- Claves de `app_settings`: `km_per_gallon`, `gas_price_cop`, `uber_commission_pct`, `pico_placa_days_week`, `maintenance_cost_per_km`.
+- Claves de `app_settings`: `km_per_gallon`, `gas_price_cop`, `uber_commission_pct`, `pico_placa_days_week`, `maintenance_cost_per_km`, `uber_pass_active` (`'1'`/`'0'`, default `'1'`), `uber_pass_price_cop` (default 90000). Una clave nueva no es cambio de esquema: `getSetting` devuelve el default si no existe.
 - `funds.balance` es un acumulado desnormalizado: `addFundMovement` inserta el movimiento y suma al balance (dos sentencias, sin transacción).
 - **No hay sistema de migraciones.** `initDatabase` solo hace `CREATE TABLE IF NOT EXISTS`, que NO agrega columnas a tablas existentes. Ver "Cambios de esquema".
 
@@ -105,8 +105,12 @@ El celular del usuario ya tiene datos reales. Una migración mala = datos perdid
 ## Lógica de dominio
 
 - **Balance del mes** (`financeCalc.ts`): obligaciones = gastos fijos + cuotas de deudas. Objetivo diario = obligaciones / 24 días laborales. Promedio = neto del mes / días con ingreso. Verde ≥ 90 % del objetivo, amarillo ≥ 65 %, rojo por debajo o si el neto es negativo. Días laborales restantes ≈ 80 % de los días calendario que quedan.
-- **Ganancia real** (`calcRealEarnings`): bruto − comisión Uber (%) − gasolina (km / km-por-galón × precio galón) − mantenimiento (km × COP/km).
-- **Efectivo**: al guardar un ingreso en efectivo se crea también un gasto `other` por la comisión Uber (`Comisión Uber en efectivo (X%)`).
+- **Uber Pass** (desde 2026-09, lo usa el papá): Uber cobra una suscripción 2 veces por semana (~$90.000 cada una) en vez de comisión por viaje. El usuario registra cada cobro como gasto `uber_pass`. Interruptor "Tengo Uber Pass" en Balance → Configurar mi vehículo.
+- **Ganancia real** (`calcRealEarnings`):
+  - Con Uber Pass: bruto − Uber Pass por día trabajado − gasolina (km / km-por-galón × precio galón) − mantenimiento (km × COP/km).
+  - Uber Pass por día trabajado (`calcUberPassPerWorkDay`) = valor × 2 / (7 − días de pico y placa). En Medellín: 180.000 / 6 = 30.000.
+  - Sin Uber Pass: la comisión Uber (%) reemplaza la línea de Uber Pass.
+- **Efectivo** (solo sin Uber Pass): al guardar un ingreso en efectivo se crea también un gasto `other` por la comisión Uber (`Comisión Uber en efectivo (X%)`). Con Uber Pass el interruptor de efectivo no se muestra.
 - **Pico y placa**: días bloqueados = días/semana × (días del mes / 7); pérdida = días bloqueados × promedio diario.
 - **DIAN**: constantes **2025** (UVT 49.799, umbral 1.340 UVT, deducible fijo 40 %, tarifa simplificada 19 % sobre 1.090 UVT). Orientativo; hay que actualizarlo cada año.
 - **Jornada**: `startWorkDay` cancela todo, programa una confirmación a los 5 s y 8 recordatorios cada 2 h. "Jornada activa" = hay notificaciones programadas pendientes.

@@ -1,5 +1,6 @@
 export const EXPENSE_CATEGORIES = [
   { id: 'gas',   label: 'Gasolina', icon: '⛽' },
+  { id: 'uber_pass', label: 'Uber Pass', icon: '🎫' },
   { id: 'food',  label: 'Comida',   icon: '🍽️' },
   { id: 'maint', label: 'Mecánico', icon: '🔧' },
   { id: 'wash',  label: 'Lavado',   icon: '🚿' },

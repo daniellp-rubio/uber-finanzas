@@ -8,7 +8,7 @@ Detectados en el escaneo del 2026-09-22. No se corrigen sin que Dafel lo pida: c
 2. **Sin sistema de migraciones.** El primer cambio de esquema debe introducir `PRAGMA user_version` (patrón en `arquitectura.md`).
 3. **Comisión en efectivo huérfana.** Al borrar un ingreso en efectivo, el gasto automático "Comisión Uber en efectivo" queda vivo. No hay vínculo entre ambas filas.
 4. **DIAN con constantes 2025** (`vehicleCalc.ts`: UVT 49.799, tramo único del 19 %). La tabla real de renta es progresiva por tramos de UVT y la UVT cambia cada año. Además, el umbral de "debe declarar" usa ingresos netos × 12, cuando la norma mira ingresos brutos, patrimonio, consumos y otros topes. Rotulado como orientativo, pero puede inducir a error.
-5. **Ganancia real resta la comisión Uber al ingreso registrado.** Si el usuario registra lo que Uber ya le pagó (neto de comisión), la comisión se descuenta dos veces. Hay que confirmar con el usuario qué número anota.
+5. **Ganancia real resta la comisión Uber al ingreso registrado** (solo con el interruptor Uber Pass apagado). Si el usuario registra lo que Uber ya le pagó (neto de comisión), la comisión se descuenta dos veces. Con Uber Pass no aplica.
 
 ## Media: comportamiento raro o frágil
 
@@ -17,7 +17,7 @@ Detectados en el escaneo del 2026-09-22. No se corrigen sin que Dafel lo pida: c
 8. `FundDetailModal` devuelve un `<Modal>` anidado dentro de otro `<Modal>` para depositar o retirar. Funciona, pero es frágil en Android.
 9. "Jornada activa" = "hay notificaciones programadas". Si el usuario borra las notificaciones desde el sistema, la app cree que la jornada terminó.
 10. Ícono de notificación = `assets/icon.png` a color. Android pinta los íconos pequeños en monocromo, así que se ve como un cuadro blanco. Necesita un PNG blanco con fondo transparente. Es un cambio nativo (APK).
-11. Pico y placa asume días fijos por semana (el default comenta "Bogotá"). No modela la rotación real por dígito de placa ni la ciudad.
+11. Pico y placa asume días fijos por semana (default 1, Medellín). No modela la rotación real por dígito de placa ni la ciudad. Si el usuario guardó su configuración antes de 2026-09, conserva el valor que tenía.
 12. `financeCalc.ts` importa `todayString` sin usarlo.
 
 ## Baja: limpieza

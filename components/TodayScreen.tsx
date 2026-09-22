@@ -138,7 +138,7 @@ export default function TodayScreen({ onAddIncome, onAddExpense, refreshTrigger 
 
             {showRealCalc && (
               <View style={s.realBody}>
-                <Text style={s.realHint}>Ingresa los km trabajados hoy para calcular tu ganancia real descontando gasolina, comisión Uber y mantenimiento.</Text>
+                <Text style={s.realHint}>Ingresa los km trabajados hoy para calcular tu ganancia real descontando gasolina, {cfg.uberPassActive ? 'Uber Pass' : 'comisión Uber'} y mantenimiento.</Text>
                 <View style={s.kmRow}>
                   <TextInput
                     style={s.kmInput}
@@ -157,10 +157,17 @@ export default function TodayScreen({ onAddIncome, onAddExpense, refreshTrigger 
                       <Text style={s.bLabel}>Bruto (lo que muestra Uber)</Text>
                       <Text style={s.bValWhite}>{formatCurrency(real.grossIncome)}</Text>
                     </View>
-                    <View style={s.bRow}>
-                      <Text style={s.bLabel}>Comisión Uber ({cfg.uberCommissionPct}%)</Text>
-                      <Text style={s.bValRed}>-{formatCurrency(real.uberCommission)}</Text>
-                    </View>
+                    {cfg.uberPassActive ? (
+                      <View style={s.bRow}>
+                        <Text style={s.bLabel}>Uber Pass (por día trabajado)</Text>
+                        <Text style={s.bValRed}>-{formatCurrency(real.uberPassDaily)}</Text>
+                      </View>
+                    ) : (
+                      <View style={s.bRow}>
+                        <Text style={s.bLabel}>Comisión Uber ({cfg.uberCommissionPct}%)</Text>
+                        <Text style={s.bValRed}>-{formatCurrency(real.uberCommission)}</Text>
+                      </View>
+                    )}
                     <View style={s.bRow}>
                       <Text style={s.bLabel}>Gasolina ({km} km)</Text>
                       <Text style={s.bValRed}>-{formatCurrency(real.fuelCost)}</Text>

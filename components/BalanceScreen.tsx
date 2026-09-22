@@ -57,6 +57,7 @@ export default function BalanceScreen() {
   const [cfgComm, setCfgComm]             = useState(String(cfg.uberCommissionPct));
   const [cfgPico, setCfgPico]             = useState(String(cfg.picoPlacaDaysPerWeek));
   const [cfgMaint, setCfgMaint]           = useState(String(cfg.maintenanceCostPerKm));
+  const [cfgPass, setCfgPass]             = useState(String(cfg.uberPassPriceCOP));
 
   const load = useCallback(() => {
     setFixed(getFixedExpenses());
@@ -69,20 +70,30 @@ export default function BalanceScreen() {
     setCfgComm(String(updated.uberCommissionPct));
     setCfgPico(String(updated.picoPlacaDaysPerWeek));
     setCfgMaint(String(updated.maintenanceCostPerKm));
+    setCfgPass(String(updated.uberPassPriceCOP));
   }, []);
 
   React.useEffect(() => { load(); }, [load]);
 
   const saveConfig = () => {
+    // La comisión sí puede ser 0; los demás campos en 0 no tienen sentido
+    const comm = Number(cfgComm);
     saveVehicleConfig({
       kmPerGallon:          Number(cfgKm)   || cfg.kmPerGallon,
       gasPriceCOP:          Number(cfgGas)  || cfg.gasPriceCOP,
-      uberCommissionPct:    Number(cfgComm) || cfg.uberCommissionPct,
+      uberCommissionPct:    cfgComm.trim() !== '' && Number.isFinite(comm) ? comm : cfg.uberCommissionPct,
       picoPlacaDaysPerWeek: Number(cfgPico) || cfg.picoPlacaDaysPerWeek,
       maintenanceCostPerKm: Number(cfgMaint)|| cfg.maintenanceCostPerKm,
+      uberPassPriceCOP:     Number(cfgPass) || cfg.uberPassPriceCOP,
     });
     load();
     setShowConfig(false);
+  };
+
+  // Se guarda al tocar, sin pasar por "Guardar configuración"
+  const toggleUberPass = () => {
+    saveVehicleConfig({ uberPassActive: !cfg.uberPassActive });
+    setCfg(getVehicleConfig());
   };
 
   const handleDeleteFixed = (id: number, name: string) => {
@@ -347,10 +358,28 @@ export default function BalanceScreen() {
 
         {showConfig && (
           <View style={s.configBox}>
+            <TouchableOpacity
+              style={[s.passToggle, cfg.uberPassActive && s.passToggleOn]}
+              onPress={toggleUberPass}
+              activeOpacity={0.8}
+            >
+              <Text style={s.passIcon}>🎫</Text>
+              <View style={s.passText}>
+                <Text style={[s.passTitle, cfg.uberPassActive && s.passTitleOn]}>Tengo Uber Pass</Text>
+                <Text style={s.passSub}>
+                  {cfg.uberPassActive
+                    ? 'Uber no te cobra comisión. Toca para volver a la comisión.'
+                    : 'Uber te cobra comisión por viaje. Toca si pagas Uber Pass.'}
+                </Text>
+              </View>
+              <View style={[s.passDot, cfg.uberPassActive && s.passDotOn]} />
+            </TouchableOpacity>
             {[
               { label: 'Rendimiento (km/galón)',      val: cfgKm,    set: setCfgKm },
               { label: 'Precio galón (COP)',           val: cfgGas,   set: setCfgGas },
-              { label: 'Comisión Uber (%)',            val: cfgComm,  set: setCfgComm },
+              cfg.uberPassActive
+                ? { label: 'Valor de cada Uber Pass (COP)', val: cfgPass, set: setCfgPass }
+                : { label: 'Comisión Uber (%)',            val: cfgComm, set: setCfgComm },
               { label: 'Días pico y placa por semana', val: cfgPico,  set: setCfgPico },
               { label: 'Costo mantenimiento (COP/km)', val: cfgMaint, set: setCfgMaint },
             ].map(row => (
@@ -459,6 +488,15 @@ const s = StyleSheet.create({
   configBtn:     { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#1a1a1a', borderRadius: 18, padding: 16, marginBottom: 10 },
   configBtnTxt:  { color: '#888', fontSize: 14, fontWeight: '600' },
   configBox:     { backgroundColor: '#1a1a1a', borderRadius: 18, padding: 16, marginBottom: 14 },
+  passToggle:    { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: '#222', borderRadius: 14, padding: 14, marginBottom: 16, borderWidth: 1.5, borderColor: 'transparent' },
+  passToggleOn:  { borderColor: '#00C853', backgroundColor: '#0a2e1a' },
+  passIcon:      { fontSize: 22 },
+  passText:      { flex: 1 },
+  passTitle:     { color: '#888', fontSize: 15, fontWeight: '700' },
+  passTitleOn:   { color: '#00C853' },
+  passSub:       { color: '#666', fontSize: 11, marginTop: 2, lineHeight: 16 },
+  passDot:       { width: 18, height: 18, borderRadius: 9, backgroundColor: '#333', borderWidth: 2, borderColor: '#555' },
+  passDotOn:     { backgroundColor: '#00C853', borderColor: '#00C853' },
   cfgRow:        { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 },
   cfgLabel:      { color: '#aaa', fontSize: 13, flex: 1 },
   cfgInput:      { backgroundColor: '#262626', borderRadius: 10, padding: 10, color: '#fff', fontSize: 16, fontWeight: '700', width: 100, textAlign: 'center' },

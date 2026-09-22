@@ -36,6 +36,12 @@ export default function AddTransactionModal({ initialType, onClose, onSaved }: P
     setCategory('');
   };
 
+  const handleCategory = (id: string) => {
+    setCategory(id);
+    // Uber Pass casi siempre vale lo mismo: se pre-llena el monto (editable)
+    if (id === 'uber_pass' && !rawAmount) setRaw(String(cfg.uberPassPriceCOP));
+  };
+
   const handleAmountChange = (text: string) => {
     const digits = text.replace(/\D/g, '');
     setRaw(digits);
@@ -129,7 +135,7 @@ export default function AddTransactionModal({ initialType, onClose, onSaved }: P
                     s.catBtn,
                     active && (type === 'income' ? s.catGreen : s.catRed),
                   ]}
-                  onPress={() => setCategory(cat.id)}
+                  onPress={() => handleCategory(cat.id)}
                 >
                   <Text style={s.catIcon}>{cat.icon}</Text>
                   <Text style={[s.catLabel, active && s.catLabelActive]}>{cat.label}</Text>
@@ -138,8 +144,8 @@ export default function AddTransactionModal({ initialType, onClose, onSaved }: P
             })}
           </View>
 
-          {/* Efectivo toggle (solo para ingresos) */}
-          {type === 'income' && (
+          {/* Efectivo toggle (solo para ingresos, y solo si Uber cobra comisión) */}
+          {type === 'income' && !cfg.uberPassActive && (
             <>
               <TouchableOpacity
                 style={[s.cashToggle, isCash && s.cashToggleActive]}
