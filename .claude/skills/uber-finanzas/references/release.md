@@ -52,13 +52,13 @@ Antes de pedir aprobación, di cuál de los dos será. Tras abrir el PR, confír
 
 | # | Paso | Quién | Estado 2026-09-22 |
 |---|---|---|---|
-| 0 | *(Opcional)* Bloqueo de facturación de GitHub. **No pagar ni agregar tarjeta.** Vía gratis: ticket en https://support.github.com pidiendo quitar el flag de billing. Sin esto se publica en modo local, que cubre todo el flujo | Dafel | bloqueado (visto el 2026-09-22); no bloquea nada |
+| 0 | *(Opcional)* Bloqueo de facturación de GitHub. **No pagar ni agregar tarjeta.** Vía gratis: ticket en https://support.github.com pidiendo quitar el flag de billing. Sin esto se publica en modo local, que cubre todo el flujo | Dafel | bloqueado (re-verificado 2026-09-22); no bloquea nada |
 | 1 | Repo público `daniellp-rubio/uber-finanzas`, rama `main`, solo squash, borrar rama al mergear | Claude | hecho 2026-09-22 |
-| 2 | `npx eas-cli login` en la máquina local | Dafel, en su terminal | pendiente |
-| 3 | *(Solo modo Actions)* Access token en expo.dev → Account settings → Access tokens → secret `EXPO_TOKEN` del repo | Dafel: `gh secret set EXPO_TOKEN --repo daniellp-rubio/uber-finanzas` en su terminal | no aplica mientras siga el paso 0 |
-| 4 | Verificar llave: `npx eas-cli credentials -p android` → **una sola** keystore para `com.uberfinanzas.app`, la misma con que se firmó el APK que ya tiene el usuario (salió del perfil `preview`, versionCode ≤ 2) | Claude, con Dafel logueado | pendiente |
+| 2 | `npx eas-cli login` en la máquina local | Dafel, en su terminal | hecho 2026-09-22 (cuenta daniellp-rubio) |
+| 3 | *(Solo modo Actions)* Access token en expo.dev → Account settings → Access tokens → secret `EXPO_TOKEN` del repo | Dafel: `gh secret set EXPO_TOKEN --repo daniellp-rubio/uber-finanzas` en su terminal | hecho 2026-09-22 (se usará cuando se desbloquee Actions) |
+| 4 | Verificar llave: `npx eas-cli credentials -p android` → **una sola** keystore para `com.uberfinanzas.app`, la misma con que se firmó el APK que ya tiene el usuario (salió del perfil `preview`, versionCode ≤ 2) | Claude, con Dafel logueado | hecho 2026-09-22: 1 keystore JKS default, SHA-256 `c4ac4463…eeed814`, creada 2026-05-14 03:36 UTC con el primer build y nunca modificada; los 3 APK `preview` son posteriores. Los artefactos de mayo ya expiraron (404), así que no se pudo leer la firma del APK instalado directamente |
 | 5 | Backup de la keystore: `eas credentials` → Android → `credentials.json` → Download → guardar FUERA del repo (gestor de contraseñas) | Dafel | pendiente |
-| 6 | PR #1 `chore/release-pipeline` → merge → release construye build 3 | Claude | PR abierto como draft; espera los pasos 2, 4 y 5 |
+| 6 | PR #1 `chore/release-pipeline` → merge → release construye build 3 | Claude | listo para mergear; pronóstico local = apk (fingerprint `a09fcc7a…`) |
 | 7 | Mandarle al usuario el link fijo UNA vez (su app vieja no tiene aviso de updates) | Dafel | pendiente |
 
 Actualiza esta tabla cuando cambie el estado.
