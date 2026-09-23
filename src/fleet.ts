@@ -25,7 +25,7 @@ export const VEHICLE_PRESETS = {
   },
   electric: {
     kwhPer100km:     17.5,   // BYD Yuan Plus, ficha técnica
-    kwhPrice:        958,    // EPM residencial 2026, por encima de subsistencia
+    kwhPrice:        1815,   // electrolinera EPM DC 1.729 + ~5 % de pérdidas (2026-09); con cargador en casa ~1.054
     picoPlacaDays:   0,      // eléctricos exentos en Medellín (Ley 1964/2019)
     maintCostPerKm:  150,    // servicio BYD ~48 + alineación ~14 + llantas 215/55 R18 ~73 + otros ~15 (2026-09); ajustar con facturas
   },

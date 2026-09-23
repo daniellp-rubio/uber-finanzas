@@ -138,7 +138,7 @@ El celular del usuario ya tiene datos reales. Una migración mala = datos perdid
 - **Balance del mes** (`financeCalc.ts`): obligaciones = gastos fijos + cuotas de deudas. Objetivo diario = obligaciones / 24 días laborales. Promedio = neto del mes / días con ingreso. Verde ≥ 90 % del objetivo, amarillo ≥ 65 %, rojo por debajo o si el neto es negativo. Días laborales restantes ≈ 80 % de los días calendario que quedan.
 - **Uber Pass** (desde 2026-09, lo usa el papá): Uber cobra una suscripción 2 veces por semana (~$90.000 cada una) en vez de comisión por viaje. El usuario registra cada cobro como gasto `uber_pass`. Interruptor "Tengo Uber Pass" en Balance → Configurar Uber.
 - **Carro activo** (`active_vehicle_id`): de él salen la energía por km, el pico y placa y el mantenimiento por km. Si fue quitado, se usa el primer carro.
-- **Energía por km** (`energyCostPerKm`): gasolina = precio galón / km por galón; eléctrico = kWh cada 100 km / 100 × precio kWh (BYD: 17,5 × $958 ≈ $168/km).
+- **Energía por km** (`energyCostPerKm`): gasolina = precio galón / km por galón; eléctrico = kWh cada 100 km / 100 × precio kWh (BYD: 17,5 × $1.815 ≈ $318/km con electrolinera; el precio real de las cargas anotadas reemplaza al del carro).
 - **Ganancia real** (`calcRealEarnings`):
   - Con Uber Pass: bruto − Uber Pass por día trabajado − energía (km × energía por km) − mantenimiento (km × COP/km).
   - Uber Pass por día trabajado (`calcUberPassPerWorkDay`) = valor × 2 / (7 − días de pico y placa del carro activo). Duster en Medellín: 180.000 / 6 = 30.000; eléctrico sin pico y placa: 180.000 / 7 ≈ 25.714.
