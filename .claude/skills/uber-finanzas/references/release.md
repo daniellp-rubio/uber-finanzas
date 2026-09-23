@@ -52,7 +52,7 @@ Antes de pedir aprobación, di cuál de los dos será. Tras abrir el PR, confír
 
 ## Configuración inicial (una sola vez) — estado
 
-| # | Paso | Quién | Estado 2026-09-22 |
+| # | Paso | Quién | Estado 2026-09-23 |
 |---|---|---|---|
 | 0 | Bloqueo de facturación de GitHub. Causa: la tarjeta guardada falló la retención de autorización ("authorization hold failed"). Sin deuda: plan Free, $0 de uso | Dafel | resuelto 2026-09-22: Dafel puso otra tarjeta; Claude creó el tope de Sandbox y dejó **6 topes en $0 con Stop usage** (Actions, Codespaces, Packages, Git LFS, AI credits, Sandbox). CI re-corrido en verde (run 35761386049) |
 | 1 | Repo público `daniellp-rubio/uber-finanzas`, rama `main`, solo squash, borrar rama al mergear | Claude | hecho 2026-09-22 |
@@ -60,7 +60,7 @@ Antes de pedir aprobación, di cuál de los dos será. Tras abrir el PR, confír
 | 3 | *(Solo modo Actions)* Access token en expo.dev → Account settings → Access tokens → secret `EXPO_TOKEN` del repo | Dafel: `gh secret set EXPO_TOKEN --repo daniellp-rubio/uber-finanzas` en su terminal | hecho 2026-09-22; probado: `release-forecast` corrió en CI con el token |
 | 4 | Verificar llave: `npx eas-cli credentials -p android` → **una sola** keystore para `com.uberfinanzas.app`, la misma con que se firmó el APK que ya tiene el usuario (salió del perfil `preview`, versionCode ≤ 2) | Claude, con Dafel logueado | hecho 2026-09-22: 1 keystore JKS default, SHA-256 `c4ac4463…eeed814`, creada 2026-05-14 03:36 UTC con el primer build y nunca modificada; los 3 APK `preview` son posteriores. Los artefactos de mayo ya expiraron (404), así que no se pudo leer la firma del APK instalado directamente |
 | 5 | Backup de la keystore: `eas credentials` → Android → `credentials.json` → Download → guardar FUERA del repo (gestor de contraseñas) | Dafel | hecho 2026-09-22 (según Dafel) |
-| 6 | Un solo PR con el pipeline y las fases (reemplaza al PR #1) → merge → release construye build 3 | Claude | 2026-09-23: Dafel aprobó todo ("súbelo"). PR desde `feat/extras`; al mergear, `release.yml` construye el build 3 solo |
+| 6 | Un solo PR con el pipeline y las fases (reemplaza al PR #1) → merge → release construye build 3 | Claude | hecho 2026-09-23: PR #2 (a487183) → run 35890719230 → release `build-3` (versionCode 3, fingerprint `33b12c49…`). Firma del APK verificada: SHA-256 `c4ac4463…eeed814`, la misma keystore |
 | 7 | Mandarle al usuario el link fijo UNA vez (su app vieja no tiene aviso de updates) | Dafel | pendiente |
 
 Actualiza esta tabla cuando cambie el estado.
