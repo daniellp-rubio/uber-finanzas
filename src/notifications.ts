@@ -1,9 +1,16 @@
 import * as Notifications from 'expo-notifications';
 import { Platform } from 'react-native';
+import { getVehicles, getVehicleDocs, getMaintenancePlans, getMaintenance, getCurrentRental, getRentalPayments } from './db';
+import { DOC_KINDS, planStatus, maintenanceLabel } from './fleet';
+import { rentStatus } from './rental';
+import { nextBackupReminder } from './backupData';
+import { addDays, formatCurrency, formatDate, todayString } from './format';
 
 const CHANNEL_ID       = 'uber-finanzas-reminders';
 const INTERVAL_HOURS   = 2;
 const MAX_REMINDERS    = 8; // hasta 16 horas de jornada
+const VEHICLE_KIND     = 'vehicle'; // marca de los avisos de carros (no son de la jornada)
+const BACKUP_KIND      = 'backup';  // marca del aviso de copia de seguridad (tampoco es de la jornada)
 
 // ── Configura cómo se muestran las notificaciones cuando la app está abierta ──
 Notifications.setNotificationHandler({
@@ -37,8 +44,8 @@ export async function requestNotificationPermission(): Promise<boolean> {
 
 // ── Iniciar jornada ───────────────────────────────────────────────────────────
 export async function startWorkDay(): Promise<void> {
-  // Cancelar notificaciones previas
-  await Notifications.cancelAllScheduledNotificationsAsync();
+  // Cancelar recordatorios previos de la jornada (los avisos de carros se quedan)
+  await cancelWorkDayNotifications();
 
   // Notificación de confirmación (5 segundos)
   await Notifications.scheduleNotificationAsync({
@@ -71,11 +78,105 @@ export async function startWorkDay(): Promise<void> {
 
 // ── Finalizar jornada ─────────────────────────────────────────────────────────
 export async function endWorkDay(): Promise<void> {
-  await Notifications.cancelAllScheduledNotificationsAsync();
+  await cancelWorkDayNotifications();
 }
 
 // ── ¿Hay jornada activa? ──────────────────────────────────────────────────────
 export async function isWorkDayActive(): Promise<boolean> {
   const scheduled = await Notifications.getAllScheduledNotificationsAsync();
-  return scheduled.length > 0;
+  return scheduled.some(isWorkDayReminder);
+}
+
+function isVehicleReminder(n: Notifications.NotificationRequest): boolean {
+  return n.content.data?.kind === VEHICLE_KIND;
+}
+
+function isBackupReminder(n: Notifications.NotificationRequest): boolean {
+  return n.content.data?.kind === BACKUP_KIND;
+}
+
+// Todo lo que no tiene marca es de la jornada (incluye los programados antes de existir las marcas)
+function isWorkDayReminder(n: Notifications.NotificationRequest): boolean {
+  return !isVehicleReminder(n) && !isBackupReminder(n);
+}
+
+async function cancelWorkDayNotifications(): Promise<void> {
+  const scheduled = await Notifications.getAllScheduledNotificationsAsync();
+  await Promise.all(scheduled
+    .filter(isWorkDayReminder)
+    .map(n => Notifications.cancelScheduledNotificationAsync(n.identifier)));
+}
+
+// ── Avisos de carros (arriendo, SOAT, técnico-mecánica, impuesto, seguro, mantenimiento por fecha) ──
+// Se reprograman todos desde cero: al abrir la app y cada vez que cambia una fecha.
+// Los mantenimientos por km no se pueden programar: salen como aviso dentro de la app.
+export async function refreshVehicleReminders(): Promise<void> {
+  const scheduled = await Notifications.getAllScheduledNotificationsAsync();
+  await Promise.all(scheduled
+    .filter(isVehicleReminder)
+    .map(n => Notifications.cancelScheduledNotificationAsync(n.identifier)));
+
+  const today = todayString();
+  const items: { date: string; title: string; body: string }[] = [];
+
+  for (const v of getVehicles()) {
+    const docs = getVehicleDocs(v.id);
+    for (const kind of DOC_KINDS) {
+      const due = docs.find(d => d.kind === kind.id)?.due_date;
+      if (!due) continue;
+      const body = `${v.name}: ${kind.label} vence el ${formatDate(due)}.`;
+      items.push({ date: addDays(due, -15), title: `${kind.icon} ${kind.label} vence en 15 días`, body });
+      items.push({ date: addDays(due, -1),  title: `${kind.icon} ${kind.label} vence mañana`,     body });
+    }
+
+    const records = getMaintenance(v.id);
+    for (const plan of getMaintenancePlans(v.id)) {
+      const st = planStatus(plan, records, v.odometer_km, today);
+      if (!st.nextDate) continue;
+      const body = `${v.name}: toca ${maintenanceLabel(plan.kind).toLowerCase()} antes del ${formatDate(st.nextDate)}.`;
+      items.push({ date: addDays(st.nextDate, -7), title: '🔧 Mantenimiento en 7 días', body });
+    }
+
+    // Arriendo: el día de cada una de las próximas 4 cuotas sin pagar
+    const rental = getCurrentRental(v.id);
+    if (rental) {
+      const st = rentStatus(rental, getRentalPayments(rental.id), today);
+      for (let i = 0; st.nextDue && i < 4; i++) {
+        items.push({
+          date:  addDays(st.nextDue, 7 * i),
+          title: '🔑 Hoy paga el arriendo',
+          body:  `${rental.driver_name} (${v.name}): cuota de ${formatCurrency(rental.weekly_fee)}.`,
+        });
+      }
+    }
+  }
+
+  for (const it of items) {
+    const [y, m, d] = it.date.split('-').map(Number);
+    const when = new Date(y, m - 1, d, 9, 0, 0);  // 9:00 a.m.
+    if (when.getTime() <= Date.now()) continue;
+    await Notifications.scheduleNotificationAsync({
+      content: { title: it.title, body: it.body, sound: true, data: { kind: VEHICLE_KIND } },
+      trigger: { type: Notifications.SchedulableTriggerInputTypes.DATE, date: when },
+    });
+  }
+}
+
+// ── Aviso de copia de seguridad ───────────────────────────────────────────────
+// Uno solo programado a la vez; se reprograma al abrir la app y después de cada copia.
+export async function refreshBackupReminder(): Promise<void> {
+  const scheduled = await Notifications.getAllScheduledNotificationsAsync();
+  await Promise.all(scheduled
+    .filter(isBackupReminder)
+    .map(n => Notifications.cancelScheduledNotificationAsync(n.identifier)));
+  const when = nextBackupReminder(new Date(), todayString());
+  await Notifications.scheduleNotificationAsync({
+    content: {
+      title: '💾 Guarda una copia de tus datos',
+      body:  'Si se pierde o se daña el celular, con la copia no pierdes nada. Ve a 💰 Balance → Copia de seguridad.',
+      sound: true,
+      data:  { kind: BACKUP_KIND },
+    },
+    trigger: { type: Notifications.SchedulableTriggerInputTypes.DATE, date: when },
+  });
 }

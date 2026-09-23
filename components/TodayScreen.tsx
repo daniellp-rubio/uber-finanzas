@@ -3,21 +3,30 @@ import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
   Alert, RefreshControl, ActivityIndicator, TextInput,
 } from 'react-native';
-import { getTransactionsByDate, deleteTransaction, Transaction } from '../src/db';
-import { formatCurrency, formatLongDate, todayString } from '../src/format';
-import { getCategoryLabel, getCategoryIcon } from '../src/categories';
+import {
+  getTransactionsByDate, deleteTransaction, getFunds, addFundMovement, getSetting, setSetting,
+  startWorkSession, endWorkSession, Transaction,
+} from '../src/db';
+import { formatCurrency, formatLongDate, formatKm, nowString, todayString } from '../src/format';
+import { getCategoryLabel, getCategoryIcon, RENT_CATEGORY } from '../src/categories';
 import {
   requestNotificationPermission, startWorkDay, endWorkDay, isWorkDayActive,
 } from '../src/notifications';
-import { getVehicleConfig, calcRealEarnings } from '../src/vehicleCalc';
+import { getVehicleConfig, calcRealEarnings, getFleetAlerts } from '../src/vehicleCalc';
+import type { VehicleAlert } from '../src/fleet';
+import { computeBalance, calcDailyGoal, DailyGoal } from '../src/financeCalc';
+
+// Ahorro para el mecánico ya hecho hoy: "fecha|monto"
+const MAINT_SAVED_KEY = 'maint_saved_today';
 
 interface Props {
-  onAddIncome:   () => void;
-  onAddExpense:  () => void;
+  onAddIncome:    () => void;
+  onAddExpense:   () => void;
+  onOpenVehicles: () => void;
   refreshTrigger: number;
 }
 
-export default function TodayScreen({ onAddIncome, onAddExpense, refreshTrigger }: Props) {
+export default function TodayScreen({ onAddIncome, onAddExpense, onOpenVehicles, refreshTrigger }: Props) {
   const today = todayString();
 
   const [transactions, setTransactions]   = useState<Transaction[]>([]);
@@ -26,8 +35,22 @@ export default function TodayScreen({ onAddIncome, onAddExpense, refreshTrigger 
   const [workLoading, setWorkLoading]     = useState(true);
   const [showRealCalc, setShowRealCalc]   = useState(false);
   const [kmInput, setKmInput]             = useState('');
+  const [alerts, setAlerts]               = useState<VehicleAlert[]>([]);
+  const [goal, setGoal]                   = useState<DailyGoal | null>(null);
+  const [savedToday, setSavedToday]       = useState(0);
 
-  const load = useCallback(() => setTransactions(getTransactionsByDate(today)), [today]);
+  const load = useCallback(() => {
+    const txs = getTransactionsByDate(today);
+    setTransactions(txs);
+    setAlerts(getFleetAlerts());
+    // Meta del día: solo si hay gastos fijos o deudas anotados en Balance
+    const b = computeBalance();
+    const todayNet = txs.reduce((s, t) => s + (t.type === 'income' ? t.amount : -t.amount), 0);
+    setGoal(b.status === 'none' ? null
+      : calcDailyGoal(b.monthlyObligations, b.currentMonthNet, todayNet, b.workingDaysEstLeft));
+    const [date, amount] = getSetting(MAINT_SAVED_KEY, '').split('|');
+    setSavedToday(date === today ? Number(amount) || 0 : 0);
+  }, [today]);
 
   useEffect(() => { load(); }, [load, refreshTrigger]);
   useEffect(() => {
@@ -54,6 +77,7 @@ export default function TodayScreen({ onAddIncome, onAddExpense, refreshTrigger 
       return;
     }
     setWorkLoading(true);
+    startWorkSession(nowString());  // hora de inicio, para la ganancia por hora
     await startWorkDay();
     setWorking(true);
     setWorkLoading(false);
@@ -63,14 +87,40 @@ export default function TodayScreen({ onAddIncome, onAddExpense, refreshTrigger 
     Alert.alert('Finalizar jornada', '¿Detener los recordatorios del día?', [
       { text: 'Cancelar', style: 'cancel' },
       { text: 'Sí, finalizar', style: 'destructive', onPress: async () => {
+        endWorkSession(nowString());
         setWorkLoading(true); await endWorkDay(); setWorking(false); setWorkLoading(false);
+        // Abre la calculadora para anotar los km y separar lo del mecánico
+        if (driveIncome > 0) setShowRealCalc(true);
       }},
     ]);
 
-  // Calculadora ganancia real
+  // Calculadora ganancia real: solo lo que se ganó manejando (el arriendo del carro no cuenta)
   const cfg = getVehicleConfig();
   const km  = Number(kmInput) || 0;
-  const real = income > 0 && km > 0 ? calcRealEarnings(income, km, cfg) : null;
+  const driveIncome = transactions
+    .filter(t => t.type === 'income' && t.category !== RENT_CATEGORY)
+    .reduce((s, t) => s + t.amount, 0);
+  const real = driveIncome > 0 && km > 0 ? calcRealEarnings(driveIncome, km, cfg) : null;
+
+  // Fondo del mecánico (el que se creó por defecto; si lo renombraron, el del ícono 🔧)
+  const saveForMechanic = (amount: number) => {
+    const funds = getFunds();
+    const fund = funds.find(f => f.name === 'Mecánico') ?? funds.find(f => f.icon === '🔧');
+    if (!fund) {
+      Alert.alert('Sin fondo', 'No encontré el fondo del mecánico. Créalo en 💼 Fondos.');
+      return;
+    }
+    Alert.alert('Separar para el mecánico',
+      `¿Pasar ${formatCurrency(amount)} al fondo ${fund.name}? Es la plata que se gasta el carro por los ${formatKm(km)} km de hoy.`, [
+        { text: 'Cancelar', style: 'cancel' },
+        { text: 'Sí, separar', onPress: () => {
+          addFundMovement(fund.id, amount, `Mantenimiento · ${formatKm(km)} km`, today);
+          const total = savedToday + amount;
+          setSetting(MAINT_SAVED_KEY, `${today}|${total}`);
+          setSavedToday(total);
+        }},
+      ]);
+  };
 
   return (
     <View style={s.container}>
@@ -108,6 +158,43 @@ export default function TodayScreen({ onAddIncome, onAddExpense, refreshTrigger 
           </View>
         )}
 
+        {/* ── Avisos de los carros (SOAT, mantenimientos…) ── */}
+        {alerts.length > 0 && (
+          <TouchableOpacity
+            style={[s.alertCard, alerts[0].level === 'red' ? s.alertRed : s.alertYellow]}
+            onPress={onOpenVehicles}
+            activeOpacity={0.8}
+          >
+            {alerts.slice(0, 2).map((a, i) => (
+              <Text key={i} style={[s.alertTxt, { color: a.level === 'red' ? '#F44336' : '#FFC107' }]}>
+                {a.icon} {a.text}
+              </Text>
+            ))}
+            <Text style={s.alertMore}>
+              {alerts.length > 2 ? `+${alerts.length - 2} más · ` : ''}Toca para ver en Carros ›
+            </Text>
+          </TouchableOpacity>
+        )}
+
+        {/* ── Meta del día ── */}
+        {goal && (
+          <View style={[s.goalCard, goal.left === 0 && s.goalDone]}>
+            {goal.monthCovered ? (
+              <Text style={s.goalTitleDone}>✅ Ya cubriste los gastos del mes</Text>
+            ) : goal.left === 0 ? (
+              <Text style={s.goalTitleDone}>✅ Meta de hoy cumplida ({formatCurrency(goal.goal)})</Text>
+            ) : (
+              <>
+                <Text style={s.goalTitle}>🎯 Hoy necesitas {formatCurrency(goal.goal)}</Text>
+                <Text style={s.goalSub}>Te faltan {formatCurrency(goal.left)} para ir al día con los gastos del mes</Text>
+                <View style={s.goalBar}>
+                  <View style={[s.goalFill, { width: `${Math.round(Math.min(Math.max(1 - goal.left / goal.goal, 0), 1) * 100)}%` }]} />
+                </View>
+              </>
+            )}
+          </View>
+        )}
+
         {/* ── Cards resumen ── */}
         <View style={s.row}>
           <View style={[s.card, s.cardGreen]}>
@@ -129,7 +216,7 @@ export default function TodayScreen({ onAddIncome, onAddExpense, refreshTrigger 
         </View>
 
         {/* ── Calculadora ganancia real ── */}
-        {income > 0 && (
+        {driveIncome > 0 && (
           <View style={s.realCard}>
             <TouchableOpacity style={s.realHeader} onPress={() => setShowRealCalc(v => !v)}>
               <Text style={s.realTitle}>🔍 ¿Cuánto gané de verdad?</Text>
@@ -138,7 +225,7 @@ export default function TodayScreen({ onAddIncome, onAddExpense, refreshTrigger 
 
             {showRealCalc && (
               <View style={s.realBody}>
-                <Text style={s.realHint}>Ingresa los km trabajados hoy para calcular tu ganancia real descontando gasolina, comisión Uber y mantenimiento.</Text>
+                <Text style={s.realHint}>Ingresa los km trabajados hoy ({cfg.vehicleName}) para calcular tu ganancia real descontando {cfg.energy === 'electric' ? 'la carga' : 'gasolina'}, {cfg.uberPassActive ? 'Uber Pass' : 'comisión Uber'} y mantenimiento.</Text>
                 <View style={s.kmRow}>
                   <TextInput
                     style={s.kmInput}
@@ -157,13 +244,20 @@ export default function TodayScreen({ onAddIncome, onAddExpense, refreshTrigger 
                       <Text style={s.bLabel}>Bruto (lo que muestra Uber)</Text>
                       <Text style={s.bValWhite}>{formatCurrency(real.grossIncome)}</Text>
                     </View>
+                    {cfg.uberPassActive ? (
+                      <View style={s.bRow}>
+                        <Text style={s.bLabel}>Uber Pass (por día trabajado)</Text>
+                        <Text style={s.bValRed}>-{formatCurrency(real.uberPassDaily)}</Text>
+                      </View>
+                    ) : (
+                      <View style={s.bRow}>
+                        <Text style={s.bLabel}>Comisión Uber ({cfg.uberCommissionPct}%)</Text>
+                        <Text style={s.bValRed}>-{formatCurrency(real.uberCommission)}</Text>
+                      </View>
+                    )}
                     <View style={s.bRow}>
-                      <Text style={s.bLabel}>Comisión Uber ({cfg.uberCommissionPct}%)</Text>
-                      <Text style={s.bValRed}>-{formatCurrency(real.uberCommission)}</Text>
-                    </View>
-                    <View style={s.bRow}>
-                      <Text style={s.bLabel}>Gasolina ({km} km)</Text>
-                      <Text style={s.bValRed}>-{formatCurrency(real.fuelCost)}</Text>
+                      <Text style={s.bLabel}>{cfg.energy === 'electric' ? 'Carga eléctrica' : 'Gasolina'} ({km} km)</Text>
+                      <Text style={s.bValRed}>-{formatCurrency(real.energyCost)}</Text>
                     </View>
                     <View style={s.bRow}>
                       <Text style={s.bLabel}>Provisión mecánico</Text>
@@ -177,6 +271,22 @@ export default function TodayScreen({ onAddIncome, onAddExpense, refreshTrigger 
                       </Text>
                     </View>
                     <Text style={s.costPerKm}>Costo por km: {formatCurrency(real.costPerKm)}</Text>
+
+                    {/* Separar lo del mecánico */}
+                    {real.maintenanceCost > 0 && (
+                      savedToday >= real.maintenanceCost ? (
+                        <Text style={s.savedTxt}>✓ Hoy ya separaste {formatCurrency(savedToday)} para el mecánico</Text>
+                      ) : (
+                        <TouchableOpacity
+                          style={s.saveMaintBtn}
+                          onPress={() => saveForMechanic(real.maintenanceCost - savedToday)}
+                          activeOpacity={0.8}
+                        >
+                          <Text style={s.saveMaintTitle}>🔧 Separa {formatCurrency(real.maintenanceCost - savedToday)} para el mecánico</Text>
+                          <Text style={s.saveMaintSub}>Toca para pasarlo al fondo Mecánico</Text>
+                        </TouchableOpacity>
+                      )
+                    )}
                   </View>
                 ) : (
                   km > 0 ? null : <Text style={s.realHintSmall}>Escribe los km para ver el cálculo.</Text>
@@ -239,6 +349,11 @@ const s = StyleSheet.create({
   workingSub:     { color: '#4caf7a', fontSize: 11, marginTop: 2 },
   endBtn:         { backgroundColor: '#2a0a0a', borderRadius: 12, paddingVertical: 8, paddingHorizontal: 12, borderWidth: 1, borderColor: '#F44336' },
   endBtnTxt:      { color: '#F44336', fontSize: 13, fontWeight: '700' },
+  alertCard:      { borderRadius: 16, padding: 14, marginBottom: 14, borderWidth: 1 },
+  alertRed:       { backgroundColor: '#2e0a0a', borderColor: '#F44336' },
+  alertYellow:    { backgroundColor: '#1a1a00', borderColor: '#FFC10760' },
+  alertTxt:       { fontSize: 14, fontWeight: '600', lineHeight: 20, marginBottom: 4 },
+  alertMore:      { color: '#888', fontSize: 12, marginTop: 2 },
   row:            { flexDirection: 'row', gap: 12, marginBottom: 12 },
   card:           { flex: 1, borderRadius: 16, padding: 16 },
   cardGreen:      { backgroundColor: '#0a2e1a' },
@@ -270,6 +385,17 @@ const s = StyleSheet.create({
   bValBold:       { fontSize: 16, fontWeight: '800' },
   bDivider:       { height: 1, backgroundColor: '#333', marginVertical: 6 },
   costPerKm:      { color: '#666', fontSize: 11, textAlign: 'center', marginTop: 8 },
+  saveMaintBtn:   { backgroundColor: '#1a1500', borderRadius: 12, padding: 12, marginTop: 12, borderWidth: 1, borderColor: '#FFC107' },
+  saveMaintTitle: { color: '#FFC107', fontSize: 14, fontWeight: '700' },
+  saveMaintSub:   { color: '#a88a2a', fontSize: 12, marginTop: 2 },
+  savedTxt:       { color: '#00C853', fontSize: 13, fontWeight: '600', textAlign: 'center', marginTop: 12 },
+  goalCard:       { backgroundColor: '#1a1a1a', borderRadius: 16, padding: 14, marginBottom: 12, borderWidth: 1, borderColor: '#333' },
+  goalDone:       { backgroundColor: '#0a1e12', borderColor: '#1e4d2b' },
+  goalTitle:      { color: '#fff', fontSize: 16, fontWeight: '800' },
+  goalTitleDone:  { color: '#00C853', fontSize: 15, fontWeight: '700' },
+  goalSub:        { color: '#888', fontSize: 12, marginTop: 4 },
+  goalBar:        { height: 8, backgroundColor: '#262626', borderRadius: 4, marginTop: 10, overflow: 'hidden' },
+  goalFill:       { height: 8, backgroundColor: '#00C853', borderRadius: 4 },
   empty:          { color: '#555', textAlign: 'center', marginTop: 48, fontSize: 16, lineHeight: 26 },
   listTitle:      { color: '#555', fontSize: 12, letterSpacing: 1, marginBottom: 10 },
   txRow:          { flexDirection: 'row', alignItems: 'center', backgroundColor: '#1e1e1e', borderRadius: 14, padding: 14, gap: 12, marginBottom: 8 },

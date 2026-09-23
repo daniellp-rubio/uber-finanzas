@@ -4,9 +4,9 @@ import {
   ScrollView, Alert, KeyboardAvoidingView, Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { addTransaction } from '../src/db';
+import { addTransaction, addCharge, getActiveVehicle } from '../src/db';
 import { todayString, formatCurrency } from '../src/format';
-import { EXPENSE_CATEGORIES, INCOME_CATEGORIES, TransactionType } from '../src/categories';
+import { EXPENSE_CATEGORIES, INCOME_CATEGORIES, CHARGE_CATEGORY, TransactionType } from '../src/categories';
 import { getVehicleConfig, calcCashCommission } from '../src/vehicleCalc';
 
 interface Props {
@@ -21,6 +21,8 @@ export default function AddTransactionModal({ initialType, onClose, onSaved }: P
   const [category, setCategory]   = useState('');
   const [note, setNote]           = useState('');
   const [isCash, setIsCash]       = useState(false);
+  const [rawKwh, setRawKwh]       = useState('');
+  const [place, setPlace]         = useState('');
   const inputRef                  = useRef<TextInput>(null);
 
   const cfg = getVehicleConfig();
@@ -29,11 +31,24 @@ export default function AddTransactionModal({ initialType, onClose, onSaved }: P
     ? calcCashCommission(amount, cfg)
     : 0;
 
-  const categories = type === 'income' ? INCOME_CATEGORIES : EXPENSE_CATEGORIES;
+  // Con carro eléctrico se muestra ⚡ Carga en vez de ⛽ Gasolina
+  const vehicle  = getActiveVehicle();
+  const electric = vehicle?.energy === 'electric';
+  const categories = type === 'income'
+    ? INCOME_CATEGORIES
+    : EXPENSE_CATEGORIES.filter(c => c.id !== (electric ? 'gas' : CHARGE_CATEGORY));
+  const kwh = Number(rawKwh.replace(',', '.'));
+  const isCharge = type === 'expense' && category === CHARGE_CATEGORY;
 
   const handleTypeChange = (t: TransactionType) => {
     setType(t);
     setCategory('');
+  };
+
+  const handleCategory = (id: string) => {
+    setCategory(id);
+    // Uber Pass casi siempre vale lo mismo: se pre-llena el monto (editable)
+    if (id === 'uber_pass' && !rawAmount) setRaw(String(cfg.uberPassPriceCOP));
   };
 
   const handleAmountChange = (text: string) => {
@@ -54,7 +69,16 @@ export default function AddTransactionModal({ initialType, onClose, onSaved }: P
       Alert.alert('Error', 'Selecciona una categoría');
       return;
     }
+    if (isCharge && rawKwh && !(kwh > 0)) {
+      Alert.alert('Error', 'Revisa los kWh: escribe solo el número, por ejemplo 32,5');
+      return;
+    }
     const today = todayString();
+    if (isCharge && vehicle) {
+      addCharge(vehicle.id, amount, kwh > 0 ? kwh : null, place.trim() || null, note.trim() || null, today);
+      onSaved();
+      return;
+    }
     addTransaction(type, amount, category, note.trim() || null, today);
     // Si fue en efectivo, registrar automáticamente la comisión de Uber como gasto
     if (isCash && type === 'income' && cashCommission > 0) {
@@ -129,7 +153,7 @@ export default function AddTransactionModal({ initialType, onClose, onSaved }: P
                     s.catBtn,
                     active && (type === 'income' ? s.catGreen : s.catRed),
                   ]}
-                  onPress={() => setCategory(cat.id)}
+                  onPress={() => handleCategory(cat.id)}
                 >
                   <Text style={s.catIcon}>{cat.icon}</Text>
                   <Text style={[s.catLabel, active && s.catLabelActive]}>{cat.label}</Text>
@@ -138,8 +162,8 @@ export default function AddTransactionModal({ initialType, onClose, onSaved }: P
             })}
           </View>
 
-          {/* Efectivo toggle (solo para ingresos) */}
-          {type === 'income' && (
+          {/* Efectivo toggle (solo para ingresos, y solo si Uber cobra comisión) */}
+          {type === 'income' && !cfg.uberPassActive && (
             <>
               <TouchableOpacity
                 style={[s.cashToggle, isCash && s.cashToggleActive]}
@@ -165,6 +189,32 @@ export default function AddTransactionModal({ initialType, onClose, onSaved }: P
                   </Text>
                 </View>
               )}
+            </>
+          )}
+
+          {/* Carga del carro eléctrico: kWh y lugar para saber el precio real */}
+          {isCharge && (
+            <>
+              <Text style={s.label}>¿CUÁNTOS kWh CARGÓ? (sale en el recibo)</Text>
+              <TextInput
+                style={s.textInput}
+                value={rawKwh}
+                onChangeText={t => setRawKwh(t.replace(/[^\d.,]/g, ''))}
+                keyboardType="decimal-pad"
+                placeholder="Ej: 32,5"
+                placeholderTextColor="#444"
+              />
+              {amount > 0 && kwh > 0 && (
+                <Text style={s.kwhPrice}>Pagaste {formatCurrency(amount / kwh)} por kWh</Text>
+              )}
+              <Text style={s.label}>¿DÓNDE? (opcional)</Text>
+              <TextInput
+                style={s.textInput}
+                value={place}
+                onChangeText={setPlace}
+                placeholder="Ej: Terpel Las Vegas, casa..."
+                placeholderTextColor="#444"
+              />
             </>
           )}
 
@@ -235,6 +285,11 @@ const s = StyleSheet.create({
     backgroundColor: '#1e1e1e', borderRadius: 14, padding: 16,
     color: '#fff', fontSize: 15, minHeight: 90, textAlignVertical: 'top',
   },
+  textInput: {
+    backgroundColor: '#1e1e1e', borderRadius: 14, padding: 16,
+    color: '#fff', fontSize: 17, marginBottom: 12,
+  },
+  kwhPrice: { color: '#FFC107', fontSize: 13, marginTop: -4, marginBottom: 16 },
   saveWrap: {
     padding: 16, paddingBottom: 8,
     backgroundColor: '#121212', borderTopColor: '#222', borderTopWidth: 1,
