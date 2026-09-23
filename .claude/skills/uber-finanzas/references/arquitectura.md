@@ -1,6 +1,6 @@
 # Arquitectura de Uber Finanzas
 
-Estado escaneado el 2026-09-22. Si cambias la estructura, actualiza este archivo en el mismo PR.
+Estado escaneado el 2026-09-22; actualizado el 2026-09-23 (cargas, horas, meta, copia de seguridad, PDF, DIAN 2026). Si cambias la estructura, actualiza este archivo en el mismo PR.
 
 ## Stack
 
@@ -11,6 +11,7 @@ Estado escaneado el 2026-09-22. Si cambias la estructura, actualiza este archivo
 | TypeScript | ~5.9, `strict: true` | `tsconfig` extiende `expo/tsconfig.base` |
 | Persistencia | `expo-sqlite ~16` | API **síncrona** (`getAllSync`, `runSync`) |
 | Notificaciones | `expo-notifications ~0.32` | Solo locales, sin push |
+| Archivos | `expo-file-system ~19` (API nueva `File`/`Paths`), `expo-sharing`, `expo-document-picker`, `expo-print` | Copia de seguridad y PDF. Nativos: entraron en el build 3 |
 | Navegación | ninguna librería | Tabs a mano en `App.tsx` |
 | `.npmrc` | `legacy-peer-deps=true` | CI y local deben respetarlo (`npm ci` lo lee) |
 
@@ -20,11 +21,16 @@ Dependencias instaladas y **sin usar**: `zustand`, `expo-status-bar`. No las use
 
 ```
 index.ts                 registerRootComponent(App)
-App.tsx                  Arranque (update OTA → initDatabase + setupNotifications → avisos de carros), tab bar, modal de transacción
+App.tsx                  Arranque (update OTA → initDatabase + setupNotifications → avisos de carros y de copia), tab bar, modal de transacción
 components/
-  TodayScreen.tsx        Tab "Hoy": jornada (recordatorios), avisos de carros, resumen del día, calculadora ganancia real, lista del día
-  HistoryScreen.tsx      Tab "Historial": semana / mes, totales, mejor día, detalle por día
-  BalanceScreen.tsx      Tab "Balance": estado del mes (verde/amarillo/rojo), gastos fijos, deudas, pico y placa, DIAN, config Uber (Pass / comisión)
+  TodayScreen.tsx        Tab "Hoy": jornada (recordatorios + hora de inicio/fin), avisos de carros, meta del día, resumen del día,
+                         calculadora ganancia real con "separa $X para el mecánico" (→ fondo Mecánico), lista del día
+  HistoryScreen.tsx      Tab "Historial": semana / mes, totales, mejor día, resumen por WhatsApp (Share), ganancia por hora
+                         (día vs noche, por día de la semana), detalle por día
+  BalanceScreen.tsx      Tab "Balance": estado del mes (verde/amarillo/rojo), gastos fijos, deudas, pico y placa, DianSection,
+                         MyDataSection, config Uber (Pass / comisión)
+  DianSection.tsx        Renta del año (DIAN 2026) proyectada con lo anotado
+  MyDataSection.tsx      Copia de seguridad (guardar / recuperar) y resumen de ingresos en PDF (IncomePdfModal)
   FundsScreen.tsx        Tab "Fondos": sobres virtuales (incluye FundActionModal y FundDetailModal internos)
   VehiclesScreen.tsx     Tab "Carros": lista → detalle (vista dentro del tab, no Modal; el botón atrás de Android vuelve).
                          Internos: DocModal (vencimientos), PlanModal (cada cuánto), OdometerModal
@@ -35,20 +41,30 @@ components/
   VehicleFormModal.tsx   Alta/edición de carro (gasolina o eléctrico, con valores típicos por tipo)
   MaintenanceModal.tsx   Registro de mantenimiento; opcionalmente lo anota como gasto 🔧 Mecánico
   DateField.tsx          Fecha escrita DD/MM/AAAA con eco en palabras (sin selector nativo)
-  AddTransactionModal.tsx  Alta de ingreso/gasto; categoría Uber Pass pre-llena el monto; toggle efectivo (solo sin Uber Pass) → registra comisión Uber como gasto automático
+  AddTransactionModal.tsx  Alta de ingreso/gasto; categoría Uber Pass pre-llena el monto; toggle efectivo (solo sin Uber Pass) → registra comisión Uber como gasto automático;
+                           con carro eléctrico ⚡ Carga reemplaza a ⛽ Gasolina y pide kWh y lugar (addCharge)
   AddFixedExpenseModal.tsx Alta de gasto fijo mensual (categorías propias, distintas a las de transacciones)
   AddDebtModal.tsx       Alta de deuda (cuota mensual + meses restantes opcional)
 src/
   db.ts                  Singleton SQLite, esquema, todas las queries
-  categories.ts          Categorías de ingreso/gasto + helpers label/icon; RENT_CATEGORY ('rent', ingreso que crea el arriendo, oculto en el selector)
-  financeCalc.ts         computeBalance(): objetivo diario y semáforo del mes
+  categories.ts          Categorías de ingreso/gasto + helpers label/icon; RENT_CATEGORY ('rent', ingreso que crea el arriendo, oculto en el selector);
+                         CHARGE_CATEGORY ('charge', gasto ⚡ Carga)
+  financeCalc.ts         computeBalance(): objetivo diario y semáforo del mes; calcDailyGoal(): meta del día en Hoy
+  workStats.ts           Puro: jornadas → días de trabajo → ganancia por hora (total, día/noche, por día de la semana)
+  summary.ts             Texto del resumen para WhatsApp
+  dian.ts                Renta: UVT 2026, tabla art. 241, topes para declarar, proyección del año (projectYear)
+  incomeReport.ts        Resumen de ingresos por mes (3 o 6 meses completos) y su HTML
+  pdf.ts                 HTML → PDF (expo-print) → Compartir
+  backupData.ts          Copia de seguridad sin nativos: tablas ↔ JSON, validación, restaurar en transacción, fecha del próximo aviso
+  backup.ts              Archivos: guardar la copia (expo-file-system + expo-sharing) y elegir una (expo-document-picker)
   fleet.ts               Constantes de flota (energía, valores típicos, tipos de mantenimiento, documentos) y cálculos puros
                          (próximo mantenimiento, vencimientos, avisos). No importa la DB: db.ts importa de aquí
   rental.ts              Arriendo, puro: valores del contrato, estado de pagos (saldo, mora, día de recoger), km incluidos, cuánto deja/cuesta
-  vehicleCalc.ts         Config = carro activo + Uber (app_settings), ganancia real, comisión efectivo, pico y placa, DIAN,
-                         getVehicleAlerts / getFleetAlerts (incluyen el aviso del arriendo)
-  format.ts              Moneda COP, fechas locales YYYY-MM-DD, fechas en español, DD/MM/AAAA, sumar meses/días, km
-  notifications.ts       Canal Android, permisos, jornada (8 recordatorios cada 2 h), avisos de carros y días de pago del arriendo (data.kind = 'vehicle')
+  vehicleCalc.ts         Config = carro activo + Uber (app_settings), ganancia real, comisión efectivo, pico y placa,
+                         precio real del kWh (realKwhPrice / vehicleEnergyCostPerKm), getVehicleAlerts / getFleetAlerts (incluyen el aviso del arriendo)
+  format.ts              Moneda COP, fechas locales YYYY-MM-DD, fecha y hora (nowString), mes en palabras, DD/MM/AAAA, sumar meses/días, km
+  notifications.ts       Canal Android, permisos, jornada (8 recordatorios cada 2 h), avisos de carros y días de pago del arriendo (data.kind = 'vehicle'),
+                         aviso de copia de seguridad (data.kind = 'backup')
   updates.ts             (pipeline) Aplica updates OTA al arrancar; detecta APK nuevo en GitHub Releases
 assets/                  icon, adaptive-icon, splash-icon, favicon
 ```
@@ -69,15 +85,19 @@ assets/                  icon, adaptive-icon, splash-icon, favicon
 | `vehicle_docs` (v1) | id, vehicle_id, kind (`soat`/`rtm`/`tax`/`insurance`), due_date, cost; UNIQUE(vehicle_id, kind) | upsert; `due_date` NULL = sin fecha |
 | `rentals` (v2) | id, vehicle_id, driver_name, driver_phone, weekly_fee, start_date, start_km, km_per_week (NULL = sin límite), extra_km_price, late_fee_per_day, deposit, end_date (NULL = vigente), deposit_returned, note, active | lógico (solo contrato sin pagos); terminar = `end_date` |
 | `rental_payments` (v2) | id, rental_id, kind (`rent`/`fee`/`deposit`), amount, date, note, transaction_id (ingreso `rent` creado con él; NULL en depósito), active | lógico; borra su ingreso (físico) |
+| `charges` (v3) | id, vehicle_id, date, kwh (NULL = no lo anotó), amount, place, transaction_id (gasto `charge` creado con ella), active | se borra borrando su gasto en Hoy (`getCharges` hace JOIN con `transactions`) |
+| `work_sessions` (v3) | id, start_at, end_at (NULL = no tocó "Día finalizado"), hora local `YYYY-MM-DD HH:MM` | nunca |
 
-- Índices: `idx_date` sobre `transactions(date)`, `idx_maintenance_vehicle` sobre `maintenance(vehicle_id)`, `idx_rentals_vehicle`, `idx_rental_payments_rental`.
+- Índices: `idx_date` sobre `transactions(date)`, `idx_maintenance_vehicle` sobre `maintenance(vehicle_id)`, `idx_rentals_vehicle`, `idx_rental_payments_rental`, `idx_charges_vehicle` sobre `charges(vehicle_id, date)`.
 - Semilla: si `funds` está vacía se crean Emergencias, Mecánico, Multas/Legal, Pensión.
-- Claves de `app_settings`: `uber_commission_pct`, `uber_pass_active` (`'1'`/`'0'`, default `'1'`), `uber_pass_price_cop` (default 90000), `active_vehicle_id` (el carro que maneja el usuario). Una clave nueva no es cambio de esquema: `getSetting` devuelve el default si no existe.
+- Claves de `app_settings`: `uber_commission_pct`, `uber_pass_active` (`'1'`/`'0'`, default `'1'`), `uber_pass_price_cop` (default 90000), `active_vehicle_id` (el carro que maneja el usuario), `last_backup_date`, `backup_reminder_since`, `maint_saved_today` (`fecha|monto` separado hoy para el mecánico), `owner_name` y `owner_id` (para el PDF). Una clave nueva no es cambio de esquema: `getSetting` devuelve el default si no existe.
 - Claves **heredadas**: `km_per_gallon`, `gas_price_cop`, `pico_placa_days_week`, `maintenance_cost_per_km`. El JS actual ya no las usa; siguen ahí para el JS viejo si hay rollback de OTA. La migración 1 las copió al carro sembrado.
 - `funds.balance` es un acumulado desnormalizado: `addFundMovement` inserta el movimiento y suma al balance (dos sentencias, sin transacción).
-- **Migraciones con `PRAGMA user_version`** (`MIGRATIONS` en `db.ts`; `runMigrations` corre al final de `initDatabase`). Versión actual: **2**. El bloque `CREATE TABLE IF NOT EXISTS` inicial solo cubre las tablas originales.
+- **Migraciones con `PRAGMA user_version`** (`MIGRATIONS` en `db.ts`; `runMigrations` corre al final de `initDatabase`). Versión actual: **3**. El bloque `CREATE TABLE IF NOT EXISTS` inicial solo cubre las tablas originales.
   - 1: carros, mantenimientos, vencimientos. Siembra "Renault Duster" con la config que el usuario tenía (gasolina, mantenimiento por km) y pico y placa 1, y lo deja como carro activo.
   - 2: arriendo (`rentals`, `rental_payments`) y costos fijos por carro (`vehicles.debt_id`, `vehicles.extra_monthly_cost`, con `ALTER TABLE ADD COLUMN`).
+  - 3: cargas del eléctrico (`charges`) y jornadas (`work_sessions`).
+- **Tabla nueva ⇒ agrégala a `BACKUP_TABLES`** en `backupData.ts`; si no, la copia de seguridad no la guarda y restaurar la deja vacía.
 
 ### Cambios de esquema (obligatorio leer antes de tocar `db.ts`)
 
@@ -140,8 +160,23 @@ El celular del usuario ya tiene datos reales. Una migración mala = datos perdid
   - Un carro arrendado no puede ser el activo ni quitarse; el activo no se puede arrendar.
   - Aviso en Hoy/Carros (`rentalAlert`) y notificación a las 9:00 en el día de cada una de las próximas 4 cuotas sin pagar.
 - **Cuánto deja / cuánto cuesta** (`vehicleEconomics`): fijos = cuota del crédito vinculado (de `debts`, la misma de Balance: no se cuenta dos veces) + Σ costo de vencimientos con fecha / 12 + `extra_monthly_cost`. Arrendado: arriendo × 52/12 − fijos − mantenimiento estimado (km incluidos × 52/12 × COP/km del carro); también "cuando termines el crédito" = + cuota. Propio: fijos y fijos / 24 por día de trabajo. No incluye semanas quieto ni depreciación.
-- **DIAN**: constantes **2025** (UVT 49.799, umbral 1.340 UVT, deducible fijo 40 %, tarifa simplificada 19 % sobre 1.090 UVT). Orientativo; hay que actualizarlo cada año.
-- **Jornada**: `startWorkDay` cancela los recordatorios de jornada, programa una confirmación a los 5 s y 8 recordatorios cada 2 h. "Jornada activa" = hay notificaciones programadas que **no** son avisos de carro (`content.data.kind !== 'vehicle'`). No uses `cancelAllScheduledNotificationsAsync`: borraría los avisos de SOAT y mantenimiento.
+- **Precio real del kWh** (`realKwhPrice`): pagado ÷ kWh de las cargas con kWh de los últimos 90 días del carro. Si hay, reemplaza a `kwh_price` en la energía por km (Hoy y Carros); si no, se usa el del carro.
+- **Meta del día** (`calcDailyGoal`, Hoy): pendiente = obligaciones − (neto del mes − neto de hoy); meta = pendiente / (días laborales restantes + 1). Es el mismo reparto de "Necesitas hoy" de Balance: si hoy hace la meta, mañana sale igual. Solo aparece si hay gastos fijos o deudas.
+- **Separar para el mecánico** (Hoy): con los km del día, el renglón "Provisión mecánico" (km × COP/km del carro) se puede pasar al fondo Mecánico (`addFundMovement`; busca el fondo por nombre y si no por 🔧). Lo separado hoy se guarda en `maint_saved_today` para no repetirlo; si suben los km, ofrece solo la diferencia. Al tocar "Día finalizado" se abre la calculadora.
+- **Ganancia por hora** (`workStats.ts`): "Empecemos el día" guarda `start_at`, "Día finalizado" guarda `end_at` en la última jornada abierta. Por cada día con jornada: horas = Σ duración; neto = neto del día sin arriendo + el de los días siguientes hasta donde terminó la jornada si no tienen jornada propia (la madrugada queda con fecha del día siguiente). Se ignoran jornadas abiertas y de más de 16 h. De día = la mitad de la jornada cae entre 6:00 y 18:00. Se calcula sobre el periodo de Historial (semana o mes).
+- **Resumen por WhatsApp** (`summaryText`): ganado, gastado, neto, días trabajados (con ingreso distinto de arriendo), arriendo aparte, horas y $/hora, mejor día. Se manda con `Share` de React Native (sin nativo nuevo).
+- **Resumen de ingresos (PDF)**: los 3 o 6 meses completos antes del mes actual, desde el primer mes con registros. Por mes: días trabajados, ingresos por conducción, arriendo (columna solo si hay), gastos, neto; total y promedio. Pide nombre (obligatorio) y cédula (opcional) y los guarda. Dice que lo hizo el titular y que no es certificado de contador.
+- **Copia de seguridad** (`backupData.ts`, `backup.ts`):
+  - JSON `{ app: 'uber-finanzas', format: 1, schema, created_at, tables }` con todas las `BACKUP_TABLES`. Se guarda en caché y se abre Compartir (WhatsApp, Drive). `last_backup_date` se marca al abrir Compartir.
+  - Recuperar: el usuario elige el archivo; se rechaza si no es de la app, si está dañado o si `schema` es mayor que el del celular. Confirmación con fecha y número de movimientos. Antes guarda lo actual en `antes-de-restaurar.json` (carpeta de documentos). Luego, en **una** transacción, borra cada tabla e inserta las filas con solo las columnas que existen hoy. Si algo falla, no cambia nada.
+  - Aviso (`refreshBackupReminder`, al abrir la app y tras cada copia): uno solo programado, a las 7:00 p.m. Sin copias: al día siguiente de tener la función; con copia: 7 días después; vencida: cada 3 días desde ahí. Las fechas son fijas, así que abrir la app no lo corre.
+- **DIAN** (`dian.ts`, investigado en 2026-09; vigente para el año gravable 2026):
+  - UVT 2026 = $52.374 (Res. DIAN 000238 de 2025). Tabla del art. 241 con las bases en UVT tal como las trae la ley (116, 788, 2.296, 5.901, 10.352).
+  - Proyección: ingresos y costos desde el primer registro del año hasta hoy × días del año / días con datos. Menos de 30 días: no se calcula.
+  - Impuesto principal = tabla sobre (ingresos − costos anotados). Costos: `gas`, `charge`, `uber_pass`, `maint`, `wash`, `toll` (comida, celular y "otro" no). Alternativa, solo si da menos: 25 % exento sobre lo de manejar, con tope de 790 UVT, del 40 % del ingreso y de 1.340 UVT. Los dos caminos son excluyentes (art. 336).
+  - Debe declarar: ingresos ≥ 1.400 UVT ($73.323.600). También se muestran los topes de consignaciones o consumos (1.400 UVT) y de patrimonio bruto (4.500 UVT, $235.683.000, sin restar deudas), que la app no puede medir.
+  - No incluye salud y pensión pagadas (INCRNGO) ni la deducción del 1 % por factura electrónica. Hay que actualizar la UVT cada diciembre.
+- **Jornada**: `startWorkDay` cancela los recordatorios de jornada, programa una confirmación a los 5 s y 8 recordatorios cada 2 h. "Jornada activa" = hay notificaciones programadas **sin marca** (ni `kind: 'vehicle'` ni `kind: 'backup'`). Toda notificación nueva que no sea de la jornada debe llevar su `kind` y excluirse en `isWorkDayReminder`. No uses `cancelAllScheduledNotificationsAsync`: borraría los avisos de SOAT, mantenimiento y copia.
 
 ## Cómo probar un cambio localmente
 

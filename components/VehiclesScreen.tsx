@@ -11,11 +11,11 @@ import {
   Vehicle, MaintenanceRecord, MaintenancePlan, VehicleDoc, Rental, RentalPayment, Debt,
 } from '../src/db';
 import {
-  DOC_KINDS, MAINTENANCE_KINDS, energyIcon, energyCostPerKm, vehicleAlerts, planStatus, docStatus,
+  DOC_KINDS, MAINTENANCE_KINDS, energyIcon, vehicleAlerts, planStatus, docStatus,
   describeDays, describePlan, maintenanceLabel, maintenanceIcon, docLabel, VehicleAlert, Level,
 } from '../src/fleet';
 import { rentStatus, rentalAlert } from '../src/rental';
-import { getVehicleAlerts } from '../src/vehicleCalc';
+import { getVehicleAlerts, vehicleEnergyCostPerKm, realKwhPrice } from '../src/vehicleCalc';
 import { formatCurrency, formatDate, formatKm, todayString } from '../src/format';
 import { refreshVehicleReminders, requestNotificationPermission } from '../src/notifications';
 import VehicleFormModal from './VehicleFormModal';
@@ -178,7 +178,8 @@ function VehicleDetail({ vehicleId, onBack }: { vehicleId: number; onBack: () =>
       { text: 'Eliminar', style: 'destructive', onPress: () => { deleteMaintenance(r); changed(); } },
     ]);
 
-  const costKm = energyCostPerKm(vehicle);
+  const costKm = vehicleEnergyCostPerKm(vehicle);
+  const realKwh = vehicle.energy === 'electric' ? realKwhPrice(vehicle.id) : null;
 
   return (
     <View style={s.container}>
@@ -319,7 +320,15 @@ function VehicleDetail({ vehicleId, onBack }: { vehicleId: number; onBack: () =>
               ? `⚡ ${String(vehicle.kwh_per_100km).replace('.', ',')} kWh cada 100 km · ${formatCurrency(vehicle.kwh_price)} el kWh`
               : `⛽ ${String(vehicle.km_per_gallon).replace('.', ',')} km por galón · ${formatCurrency(vehicle.gas_price)} el galón`}
           </Text>
+          {realKwh && (
+            <Text style={[s.dataTxt, { color: '#00C853' }]}>
+              ⚡ Lo que de verdad pagas: {formatCurrency(realKwh.price)} el kWh ({realKwh.charges} {realKwh.charges === 1 ? 'carga' : 'cargas'} en 90 días)
+            </Text>
+          )}
           <Text style={s.dataTxt}>{vehicle.energy === 'electric' ? 'Carga' : 'Gasolina'} por km: {formatCurrency(costKm)}</Text>
+          {vehicle.energy === 'electric' && !realKwh && (
+            <Text style={s.hint}>Anota tus cargas como gasto ⚡ Carga con los kWh y la app usa lo que de verdad pagas.</Text>
+          )}
           <Text style={s.dataTxt}>
             Pico y placa: {vehicle.pico_placa_days === 0 ? 'no tiene' : `${vehicle.pico_placa_days} día${vehicle.pico_placa_days === 1 ? '' : 's'} por semana`}
           </Text>

@@ -1,10 +1,10 @@
 import {
   getSetting, setSetting, getActiveVehicle, getVehicles, getMaintenancePlans, getMaintenance,
-  getVehicleDocs, getCurrentRental, getRentalPayments, Vehicle,
+  getVehicleDocs, getCurrentRental, getRentalPayments, getCharges, Vehicle,
 } from './db';
 import { VEHICLE_PRESETS, energyCostPerKm, vehicleAlerts, EnergyType, VehicleAlert } from './fleet';
 import { rentStatus, rentalAlert } from './rental';
-import { todayString } from './format';
+import { addDays, todayString } from './format';
 
 // ─── Defaults Uber (Colombia) ─────────────────────────────────────────────────
 // Gasolina, pico y placa y mantenimiento por km son de cada carro (fleet.ts → VEHICLE_PRESETS)
@@ -35,13 +35,33 @@ export function getVehicleConfig(): VehicleConfig {
   return {
     vehicleName:          v?.name ?? 'Mi carro',
     energy:               v?.energy ?? 'gasoline',
-    energyCostPerKm:      v ? energyCostPerKm(v) : g.gasPrice / g.kmPerGallon,
+    energyCostPerKm:      v ? vehicleEnergyCostPerKm(v) : g.gasPrice / g.kmPerGallon,
     picoPlacaDaysPerWeek: v?.pico_placa_days ?? g.picoPlacaDays,
     maintenanceCostPerKm: v?.maint_cost_per_km ?? g.maintCostPerKm,
     uberCommissionPct:    Number(getSetting('uber_commission_pct',    String(DEFAULTS.uberCommissionPct))),
     uberPassActive:       getSetting('uber_pass_active', DEFAULTS.uberPassActive ? '1' : '0') === '1',
     uberPassPriceCOP:     Number(getSetting('uber_pass_price_cop',    String(DEFAULTS.uberPassPriceCOP))),
   };
+}
+
+// ─── Precio real de la carga (carro eléctrico) ───────────────────────────────
+
+const CHARGE_WINDOW_DAYS = 90;
+
+// Precio promedio del kWh que pagó en las cargas anotadas con kWh de los últimos 90 días
+export function realKwhPrice(vehicleId: number, today = todayString()): { price: number; charges: number } | null {
+  const list = getCharges(vehicleId, addDays(today, -CHARGE_WINDOW_DAYS)).filter(c => c.kwh !== null && c.kwh > 0);
+  const kwh = list.reduce((s, c) => s + (c.kwh ?? 0), 0);
+  if (list.length === 0 || kwh <= 0) return null;
+  const paid = list.reduce((s, c) => s + c.amount, 0);
+  return { price: Math.round(paid / kwh), charges: list.length };
+}
+
+// Energía por km; en eléctricos usa el precio real de las cargas si ya hay alguna anotada con kWh
+export function vehicleEnergyCostPerKm(v: Vehicle): number {
+  if (v.energy !== 'electric') return energyCostPerKm(v);
+  const real = realKwhPrice(v.id);
+  return energyCostPerKm(real ? { ...v, kwh_price: real.price } : v);
 }
 
 export type UberConfig = Pick<VehicleConfig, 'uberCommissionPct' | 'uberPassActive' | 'uberPassPriceCOP'>;
@@ -144,42 +164,5 @@ export function calcPicoPlacaImpact(
     daysBlockedThisMonth: daysBlockedTotal,
     estimatedLostIncome:  estimatedLost,
     workedDaysAvailable:  workedDaysAvail,
-  };
-}
-
-// ─── Estimador DIAN (orientativo) ─────────────────────────────────────────────
-
-export interface DIANEstimate {
-  annualGrossEstimate:  number;
-  isObligatedToFile:    boolean;  // supera UVT 1340 (2025 ~$66.9M COP)
-  estimatedTax:         number;
-  deductibleExpenses:   number;
-  disclaimer:           string;
-}
-
-const UVT_2025       = 49799;    // valor UVT 2025 Colombia
-const MIN_UVT_FILE   = 1340;     // umbral para declarar renta 2025
-const MIN_INCOME_COP = UVT_2025 * MIN_UVT_FILE; // ~$66.7M COP
-
-export function calcDIANEstimate(monthlyNetAvg: number): DIANEstimate {
-  const annualGross = monthlyNetAvg * 12;
-  const isOblgated  = annualGross >= MIN_INCOME_COP;
-
-  // Gastos deducibles estimados (gasolina + mantenimiento + celular + depreciación)
-  const deductible  = Math.round(annualGross * 0.40);
-  const taxableBase = Math.max(annualGross - deductible, 0);
-
-  // Tarifa marginal simplificada (renta natural persona 2025, tramo básico ~0-19%)
-  let tax = 0;
-  if (taxableBase > UVT_2025 * 1090) {
-    tax = (taxableBase - UVT_2025 * 1090) * 0.19;
-  }
-
-  return {
-    annualGrossEstimate: Math.round(annualGross),
-    isObligatedToFile:   isOblgated,
-    estimatedTax:        Math.round(tax),
-    deductibleExpenses:  deductible,
-    disclaimer:          'Estimado orientativo. Consulta un contador para tu declaración real.',
   };
 }

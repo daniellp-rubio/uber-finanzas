@@ -1,5 +1,4 @@
 import { getFixedExpenses, getDebts, getMonthStats } from './db';
-import { todayString } from './format';
 
 export type BalanceStatus = 'none' | 'no_data' | 'green' | 'yellow' | 'red';
 
@@ -86,4 +85,22 @@ export function computeBalance(): BalanceResult {
     daysWorked, calendarDaysLeft: calDaysLeft,
     workingDaysEstLeft: workDaysLeft, netIsNegative,
   };
+}
+
+// ─── Meta del día (Hoy) ───────────────────────────────────────────────────────
+
+export interface DailyGoal {
+  goal:        number;   // lo que hay que hacer hoy para ir al día con los gastos del mes
+  left:        number;   // lo que falta hoy (0 si ya la cumplió)
+  monthCovered: boolean; // lo del mes ya está cubierto con lo que llevaba antes de hoy
+}
+
+// Lo que falta del mes (sin contar lo de hoy) repartido entre hoy y los días de trabajo que quedan.
+// Es el mismo reparto de "Necesitas hoy" en Balance: si hoy cumple la meta, mañana la meta es igual.
+export function calcDailyGoal(
+  monthlyObligations: number, monthNet: number, todayNet: number, workDaysLeftAfterToday: number,
+): DailyGoal {
+  const pending = Math.max(monthlyObligations - (monthNet - todayNet), 0);
+  const goal    = Math.round(pending / (workDaysLeftAfterToday + 1));
+  return { goal, left: Math.max(goal - todayNet, 0), monthCovered: pending === 0 };
 }

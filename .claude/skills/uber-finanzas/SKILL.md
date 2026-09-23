@@ -87,12 +87,15 @@ Mientras el paso de configuración inicial no esté completo (tabla en `referenc
 | Alta de carro / mantenimiento, campo de fecha | `components/VehicleFormModal.tsx`, `MaintenanceModal.tsx`, `DateField.tsx` |
 | Tablas, queries y migraciones | `src/db.ts` |
 | Categorías | `src/categories.ts` (gastos fijos: `AddFixedExpenseModal.tsx` + `CAT_ICONS` en `BalanceScreen.tsx`) |
-| Semáforo del mes | `src/financeCalc.ts` |
+| Semáforo del mes, meta del día | `src/financeCalc.ts` |
 | Tipos de mantenimiento y documentos, intervalos, vencimientos, avisos | `src/fleet.ts` |
-| Config del carro activo, ganancia real, pico y placa, DIAN | `src/vehicleCalc.ts` |
+| Config del carro activo, ganancia real, pico y placa, precio real del kWh | `src/vehicleCalc.ts` |
+| Renta (DIAN) | `src/dian.ts`, `components/DianSection.tsx` |
+| Copia de seguridad, resumen de ingresos en PDF | `src/backupData.ts` (sin nativos), `src/backup.ts`, `src/incomeReport.ts`, `src/pdf.ts`, `components/MyDataSection.tsx` |
+| Horas trabajadas, $/hora, resumen por WhatsApp | `src/workStats.ts`, `src/summary.ts`, `components/HistoryScreen.tsx` |
 | Arriendo: saldo, mora, km, cuánto deja o cuesta el carro | `src/rental.ts` (cálculos), `components/RentalSection.tsx`, `components/VehicleEconomics.tsx` |
 | Moneda y fechas | `src/format.ts` |
-| Recordatorios de jornada y avisos de carros | `src/notifications.ts` |
+| Recordatorios de jornada, avisos de carros y de copia de seguridad | `src/notifications.ts` |
 | OTA al arrancar, chequeo de APK nuevo, etiqueta de versión | `src/updates.ts` |
 | Pipeline | `scripts/release.sh` (toda la lógica), `.github/workflows/ci.yml`, `.github/workflows/release.yml`, `eas.json`, `app.json` → `updates` / `runtimeVersion` |
 

@@ -3,14 +3,21 @@ import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
   Alert, RefreshControl, ActivityIndicator, TextInput,
 } from 'react-native';
-import { getTransactionsByDate, deleteTransaction, Transaction } from '../src/db';
-import { formatCurrency, formatLongDate, todayString } from '../src/format';
+import {
+  getTransactionsByDate, deleteTransaction, getFunds, addFundMovement, getSetting, setSetting,
+  startWorkSession, endWorkSession, Transaction,
+} from '../src/db';
+import { formatCurrency, formatLongDate, formatKm, nowString, todayString } from '../src/format';
 import { getCategoryLabel, getCategoryIcon, RENT_CATEGORY } from '../src/categories';
 import {
   requestNotificationPermission, startWorkDay, endWorkDay, isWorkDayActive,
 } from '../src/notifications';
 import { getVehicleConfig, calcRealEarnings, getFleetAlerts } from '../src/vehicleCalc';
 import type { VehicleAlert } from '../src/fleet';
+import { computeBalance, calcDailyGoal, DailyGoal } from '../src/financeCalc';
+
+// Ahorro para el mecánico ya hecho hoy: "fecha|monto"
+const MAINT_SAVED_KEY = 'maint_saved_today';
 
 interface Props {
   onAddIncome:    () => void;
@@ -29,10 +36,20 @@ export default function TodayScreen({ onAddIncome, onAddExpense, onOpenVehicles,
   const [showRealCalc, setShowRealCalc]   = useState(false);
   const [kmInput, setKmInput]             = useState('');
   const [alerts, setAlerts]               = useState<VehicleAlert[]>([]);
+  const [goal, setGoal]                   = useState<DailyGoal | null>(null);
+  const [savedToday, setSavedToday]       = useState(0);
 
   const load = useCallback(() => {
-    setTransactions(getTransactionsByDate(today));
+    const txs = getTransactionsByDate(today);
+    setTransactions(txs);
     setAlerts(getFleetAlerts());
+    // Meta del día: solo si hay gastos fijos o deudas anotados en Balance
+    const b = computeBalance();
+    const todayNet = txs.reduce((s, t) => s + (t.type === 'income' ? t.amount : -t.amount), 0);
+    setGoal(b.status === 'none' ? null
+      : calcDailyGoal(b.monthlyObligations, b.currentMonthNet, todayNet, b.workingDaysEstLeft));
+    const [date, amount] = getSetting(MAINT_SAVED_KEY, '').split('|');
+    setSavedToday(date === today ? Number(amount) || 0 : 0);
   }, [today]);
 
   useEffect(() => { load(); }, [load, refreshTrigger]);
@@ -60,6 +77,7 @@ export default function TodayScreen({ onAddIncome, onAddExpense, onOpenVehicles,
       return;
     }
     setWorkLoading(true);
+    startWorkSession(nowString());  // hora de inicio, para la ganancia por hora
     await startWorkDay();
     setWorking(true);
     setWorkLoading(false);
@@ -69,7 +87,10 @@ export default function TodayScreen({ onAddIncome, onAddExpense, onOpenVehicles,
     Alert.alert('Finalizar jornada', '¿Detener los recordatorios del día?', [
       { text: 'Cancelar', style: 'cancel' },
       { text: 'Sí, finalizar', style: 'destructive', onPress: async () => {
+        endWorkSession(nowString());
         setWorkLoading(true); await endWorkDay(); setWorking(false); setWorkLoading(false);
+        // Abre la calculadora para anotar los km y separar lo del mecánico
+        if (driveIncome > 0) setShowRealCalc(true);
       }},
     ]);
 
@@ -80,6 +101,26 @@ export default function TodayScreen({ onAddIncome, onAddExpense, onOpenVehicles,
     .filter(t => t.type === 'income' && t.category !== RENT_CATEGORY)
     .reduce((s, t) => s + t.amount, 0);
   const real = driveIncome > 0 && km > 0 ? calcRealEarnings(driveIncome, km, cfg) : null;
+
+  // Fondo del mecánico (el que se creó por defecto; si lo renombraron, el del ícono 🔧)
+  const saveForMechanic = (amount: number) => {
+    const funds = getFunds();
+    const fund = funds.find(f => f.name === 'Mecánico') ?? funds.find(f => f.icon === '🔧');
+    if (!fund) {
+      Alert.alert('Sin fondo', 'No encontré el fondo del mecánico. Créalo en 💼 Fondos.');
+      return;
+    }
+    Alert.alert('Separar para el mecánico',
+      `¿Pasar ${formatCurrency(amount)} al fondo ${fund.name}? Es la plata que se gasta el carro por los ${formatKm(km)} km de hoy.`, [
+        { text: 'Cancelar', style: 'cancel' },
+        { text: 'Sí, separar', onPress: () => {
+          addFundMovement(fund.id, amount, `Mantenimiento · ${formatKm(km)} km`, today);
+          const total = savedToday + amount;
+          setSetting(MAINT_SAVED_KEY, `${today}|${total}`);
+          setSavedToday(total);
+        }},
+      ]);
+  };
 
   return (
     <View style={s.container}>
@@ -133,6 +174,25 @@ export default function TodayScreen({ onAddIncome, onAddExpense, onOpenVehicles,
               {alerts.length > 2 ? `+${alerts.length - 2} más · ` : ''}Toca para ver en Carros ›
             </Text>
           </TouchableOpacity>
+        )}
+
+        {/* ── Meta del día ── */}
+        {goal && (
+          <View style={[s.goalCard, goal.left === 0 && s.goalDone]}>
+            {goal.monthCovered ? (
+              <Text style={s.goalTitleDone}>✅ Ya cubriste los gastos del mes</Text>
+            ) : goal.left === 0 ? (
+              <Text style={s.goalTitleDone}>✅ Meta de hoy cumplida ({formatCurrency(goal.goal)})</Text>
+            ) : (
+              <>
+                <Text style={s.goalTitle}>🎯 Hoy necesitas {formatCurrency(goal.goal)}</Text>
+                <Text style={s.goalSub}>Te faltan {formatCurrency(goal.left)} para ir al día con los gastos del mes</Text>
+                <View style={s.goalBar}>
+                  <View style={[s.goalFill, { width: `${Math.round(Math.min(Math.max(1 - goal.left / goal.goal, 0), 1) * 100)}%` }]} />
+                </View>
+              </>
+            )}
+          </View>
         )}
 
         {/* ── Cards resumen ── */}
@@ -211,6 +271,22 @@ export default function TodayScreen({ onAddIncome, onAddExpense, onOpenVehicles,
                       </Text>
                     </View>
                     <Text style={s.costPerKm}>Costo por km: {formatCurrency(real.costPerKm)}</Text>
+
+                    {/* Separar lo del mecánico */}
+                    {real.maintenanceCost > 0 && (
+                      savedToday >= real.maintenanceCost ? (
+                        <Text style={s.savedTxt}>✓ Hoy ya separaste {formatCurrency(savedToday)} para el mecánico</Text>
+                      ) : (
+                        <TouchableOpacity
+                          style={s.saveMaintBtn}
+                          onPress={() => saveForMechanic(real.maintenanceCost - savedToday)}
+                          activeOpacity={0.8}
+                        >
+                          <Text style={s.saveMaintTitle}>🔧 Separa {formatCurrency(real.maintenanceCost - savedToday)} para el mecánico</Text>
+                          <Text style={s.saveMaintSub}>Toca para pasarlo al fondo Mecánico</Text>
+                        </TouchableOpacity>
+                      )
+                    )}
                   </View>
                 ) : (
                   km > 0 ? null : <Text style={s.realHintSmall}>Escribe los km para ver el cálculo.</Text>
@@ -309,6 +385,17 @@ const s = StyleSheet.create({
   bValBold:       { fontSize: 16, fontWeight: '800' },
   bDivider:       { height: 1, backgroundColor: '#333', marginVertical: 6 },
   costPerKm:      { color: '#666', fontSize: 11, textAlign: 'center', marginTop: 8 },
+  saveMaintBtn:   { backgroundColor: '#1a1500', borderRadius: 12, padding: 12, marginTop: 12, borderWidth: 1, borderColor: '#FFC107' },
+  saveMaintTitle: { color: '#FFC107', fontSize: 14, fontWeight: '700' },
+  saveMaintSub:   { color: '#a88a2a', fontSize: 12, marginTop: 2 },
+  savedTxt:       { color: '#00C853', fontSize: 13, fontWeight: '600', textAlign: 'center', marginTop: 12 },
+  goalCard:       { backgroundColor: '#1a1a1a', borderRadius: 16, padding: 14, marginBottom: 12, borderWidth: 1, borderColor: '#333' },
+  goalDone:       { backgroundColor: '#0a1e12', borderColor: '#1e4d2b' },
+  goalTitle:      { color: '#fff', fontSize: 16, fontWeight: '800' },
+  goalTitleDone:  { color: '#00C853', fontSize: 15, fontWeight: '700' },
+  goalSub:        { color: '#888', fontSize: 12, marginTop: 4 },
+  goalBar:        { height: 8, backgroundColor: '#262626', borderRadius: 4, marginTop: 10, overflow: 'hidden' },
+  goalFill:       { height: 8, backgroundColor: '#00C853', borderRadius: 4 },
   empty:          { color: '#555', textAlign: 'center', marginTop: 48, fontSize: 16, lineHeight: 26 },
   listTitle:      { color: '#555', fontSize: 12, letterSpacing: 1, marginBottom: 10 },
   txRow:          { flexDirection: 'row', alignItems: 'center', backgroundColor: '#1e1e1e', borderRadius: 14, padding: 14, gap: 12, marginBottom: 8 },

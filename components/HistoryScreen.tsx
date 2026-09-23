@@ -1,22 +1,36 @@
 import React, { useCallback, useState } from 'react';
 import {
-  View, Text, StyleSheet, ScrollView, TouchableOpacity,
+  View, Text, StyleSheet, ScrollView, TouchableOpacity, Share,
 } from 'react-native';
-import { getDailySummaries, DailySummary } from '../src/db';
-import { formatCurrency, dateRangeStrings, startOfMonthString, todayString, formatShortDate } from '../src/format';
+import { getDailySummaries, getWorkSessions, DailySummary, WorkSession } from '../src/db';
+import {
+  formatCurrency, dateRangeStrings, startOfMonthString, todayString, formatShortDate, formatMonth,
+} from '../src/format';
+import { buildWorkDays, hourlyStats, formatHours, HourStat } from '../src/workStats';
+import { summaryText } from '../src/summary';
+
+// Lunes primero
+const WEEKDAYS = [
+  { i: 1, label: 'Lunes' }, { i: 2, label: 'Martes' }, { i: 3, label: 'Miércoles' }, { i: 4, label: 'Jueves' },
+  { i: 5, label: 'Viernes' }, { i: 6, label: 'Sábado' }, { i: 0, label: 'Domingo' },
+];
 
 type Period = 'week' | 'month';
 
 export default function HistoryScreen() {
   const [period, setPeriod] = useState<Period>('week');
   const [summaries, setSummaries] = useState<DailySummary[]>([]);
+  const [sessions, setSessions]   = useState<WorkSession[]>([]);
+  const [from, setFrom]           = useState(todayString());
 
   const load = useCallback(() => {
     const today = todayString();
-    const from = period === 'week'
+    const start = period === 'week'
       ? dateRangeStrings(6).from
       : startOfMonthString();
-    setSummaries(getDailySummaries(from, today));
+    setFrom(start);
+    setSummaries(getDailySummaries(start, today));
+    setSessions(getWorkSessions(start, today));
   }, [period]);
 
   React.useEffect(() => { load(); }, [load]);
@@ -30,6 +44,20 @@ export default function HistoryScreen() {
   const bestDay = summaries.length
     ? summaries.reduce((best, d) => workNet(d) > workNet(best) ? d : best, summaries[0])
     : null;
+
+  const hours = hourlyStats(buildWorkDays(sessions, summaries));
+  const title = period === 'week'
+    ? `Resumen de la semana (${formatShortDate(from)} a ${formatShortDate(todayString())})`
+    : `Resumen de ${formatMonth(from.slice(0, 7))} (hasta hoy)`;
+  const shareSummary = () => { Share.share({ message: summaryText(title, summaries, hours.total) }).catch(() => {}); };
+
+  // Turno que deja más por hora (solo si hay datos de los dos)
+  const better = hours.day && hours.night
+    ? (hours.day.perHour >= hours.night.perHour ? 'day' : 'night')
+    : null;
+  const weekdayRows = WEEKDAYS
+    .map(w => ({ ...w, stat: hours.byWeekday[w.i] }))
+    .filter((w): w is typeof w & { stat: HourStat } => w.stat !== null);
 
   return (
     <View style={s.container}>
@@ -79,6 +107,48 @@ export default function HistoryScreen() {
             </Text>
           </View>
         )}
+
+        {summaries.length > 0 && (
+          <TouchableOpacity style={s.shareBtn} onPress={shareSummary} activeOpacity={0.8}>
+            <Text style={s.shareTxt}>📤 Mandar resumen por WhatsApp</Text>
+          </TouchableOpacity>
+        )}
+
+        {/* Ganancia por hora */}
+        <View style={s.hoursBox}>
+          <Text style={s.sectionTitle}>⏱️ ¿CUÁNTO TE DEJA CADA HORA?</Text>
+          {!hours.total ? (
+            <Text style={s.hoursHint}>
+              Toca "¡Empecemos el día!" al salir y "Día finalizado" al terminar. Así la app sabe cuántas horas trabajas y cuánto te deja cada hora.
+            </Text>
+          ) : (
+            <>
+              <Text style={s.hoursMain}>{formatCurrency(hours.total.perHour)} <Text style={s.hoursUnit}>por hora</Text></Text>
+              <Text style={s.hoursSub}>
+                {formatHours(hours.total.hours)} en {hours.total.days} {hours.total.days === 1 ? 'jornada' : 'jornadas'} · neto sin arriendo
+              </Text>
+              <View style={s.shiftRow}>
+                {([['day', '☀️ De día', hours.day], ['night', '🌙 De noche', hours.night]] as const).map(([key, label, st]) => (
+                  <View key={key} style={[s.shiftCard, better === key && s.shiftBest]}>
+                    <Text style={s.shiftLabel}>{label}</Text>
+                    <Text style={[s.shiftVal, better === key && { color: '#00C853' }]}>
+                      {st ? `${formatCurrency(st.perHour)}/h` : '—'}
+                    </Text>
+                    <Text style={s.shiftDays}>{st ? `${st.days} ${st.days === 1 ? 'jornada' : 'jornadas'}` : 'sin jornadas'}</Text>
+                  </View>
+                ))}
+              </View>
+              {weekdayRows.length > 1 && weekdayRows.map(w => (
+                <View key={w.i} style={s.wdRow}>
+                  <Text style={s.wdLabel}>{w.label}</Text>
+                  <Text style={s.wdDays}>{w.stat.days} {w.stat.days === 1 ? 'jornada' : 'jornadas'}</Text>
+                  <Text style={s.wdVal}>{formatCurrency(w.stat.perHour)}/h</Text>
+                </View>
+              ))}
+              <Text style={s.hoursNote}>De día = la mitad de la jornada cae entre 6 a.m. y 6 p.m.</Text>
+            </>
+          )}
+        </View>
 
         {/* Daily rows */}
         {summaries.length === 0 ? (
@@ -145,6 +215,24 @@ const s = StyleSheet.create({
     marginTop: 48, fontSize: 16, lineHeight: 26,
   },
   sectionTitle: { color: '#555', fontSize: 12, letterSpacing: 1, marginBottom: 10 },
+  shareBtn:     { backgroundColor: '#0a3020', borderRadius: 14, padding: 14, marginBottom: 14, alignItems: 'center', borderWidth: 1, borderColor: '#00C853' },
+  shareTxt:     { color: '#00C853', fontSize: 15, fontWeight: '700' },
+  hoursBox:     { backgroundColor: '#1a1a1a', borderRadius: 18, padding: 16, marginBottom: 20 },
+  hoursHint:    { color: '#777', fontSize: 13, lineHeight: 19 },
+  hoursMain:    { color: '#fff', fontSize: 26, fontWeight: '800' },
+  hoursUnit:    { color: '#888', fontSize: 14, fontWeight: '600' },
+  hoursSub:     { color: '#777', fontSize: 12, marginTop: 2, marginBottom: 12 },
+  shiftRow:     { flexDirection: 'row', gap: 10, marginBottom: 10 },
+  shiftCard:    { flex: 1, backgroundColor: '#222', borderRadius: 14, padding: 12, alignItems: 'center', borderWidth: 1, borderColor: '#2a2a2a' },
+  shiftBest:    { borderColor: '#00C853', backgroundColor: '#0a1e12' },
+  shiftLabel:   { color: '#aaa', fontSize: 13, marginBottom: 4 },
+  shiftVal:     { color: '#fff', fontSize: 17, fontWeight: '800' },
+  shiftDays:    { color: '#666', fontSize: 11, marginTop: 2 },
+  wdRow:        { flexDirection: 'row', alignItems: 'center', paddingVertical: 7, borderTopWidth: 1, borderTopColor: '#242424' },
+  wdLabel:      { color: '#ccc', fontSize: 14, flex: 1 },
+  wdDays:       { color: '#666', fontSize: 12, marginRight: 12 },
+  wdVal:        { color: '#fff', fontSize: 14, fontWeight: '700', minWidth: 80, textAlign: 'right' },
+  hoursNote:    { color: '#555', fontSize: 11, marginTop: 10 },
   dayRow: {
     backgroundColor: '#1e1e1e', borderRadius: 14,
     padding: 16, marginBottom: 8,

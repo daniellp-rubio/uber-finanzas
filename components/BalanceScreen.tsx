@@ -12,9 +12,10 @@ import { formatCurrency } from '../src/format';
 import AddFixedExpenseModal from './AddFixedExpenseModal';
 import AddDebtModal from './AddDebtModal';
 import {
-  getVehicleConfig, saveUberConfig, calcPicoPlacaImpact, calcDIANEstimate,
-  VehicleConfig,
+  getVehicleConfig, saveUberConfig, calcPicoPlacaImpact, VehicleConfig,
 } from '../src/vehicleCalc';
+import DianSection from './DianSection';
+import MyDataSection from './MyDataSection';
 import { versionLabel } from '../src/updates';
 
 // ─── Category icons for fixed expenses ───────────────────────────────────────
@@ -48,7 +49,6 @@ export default function BalanceScreen() {
   const [showAddFixed, setShowAddFixed]   = useState(false);
   const [showAddDebt, setShowAddDebt]     = useState(false);
   const [showConfig, setShowConfig]       = useState(false);
-  const [showDIAN, setShowDIAN]           = useState(false);
   const [cfg, setCfg]                     = useState<VehicleConfig>(getVehicleConfig());
 
   // Config Uber (editable). Gasolina, pico y placa y mantenimiento están en cada carro (tab Carros)
@@ -313,40 +313,11 @@ export default function BalanceScreen() {
           );
         })()}
 
-        {/* ── Estimador DIAN ── */}
-        {b && b.daysWorked > 0 && (() => {
-          const dian = calcDIANEstimate(b.dailyAvg * 24);
-          return (
-            <TouchableOpacity style={s.section} onPress={() => setShowDIAN(v => !v)} activeOpacity={0.8}>
-              <View style={s.sectionHeader}>
-                <Text style={s.sectionTitle}>🏛️ ESTIMADOR DIAN</Text>
-                <Text style={s.chevron}>{showDIAN ? '▲' : '▼'}</Text>
-              </View>
-              <Text style={[s.dianStatus, { color: dian.isObligatedToFile ? '#F44336' : '#00C853' }]}>
-                {dian.isObligatedToFile
-                  ? '⚠️ Posiblemente debes declarar renta'
-                  : '✓ Probablemente bajo el umbral de declaración'}
-              </Text>
-              {showDIAN && (
-                <View style={s.dianDetail}>
-                  <View style={s.bRow}>
-                    <Text style={s.bLabel}>Ingreso anual estimado</Text>
-                    <Text style={s.bValW}>{formatCurrency(dian.annualGrossEstimate)}</Text>
-                  </View>
-                  <View style={s.bRow}>
-                    <Text style={s.bLabel}>Gastos deducibles (~40%)</Text>
-                    <Text style={{ color: '#00C853', fontSize: 13, fontWeight: '600' }}>-{formatCurrency(dian.deductibleExpenses)}</Text>
-                  </View>
-                  <View style={s.bRow}>
-                    <Text style={s.bLabel}>Impuesto estimado</Text>
-                    <Text style={{ color: '#F44336', fontSize: 13, fontWeight: '600' }}>{formatCurrency(dian.estimatedTax)}</Text>
-                  </View>
-                  <Text style={s.dianDisclaimer}>{dian.disclaimer}</Text>
-                </View>
-              )}
-            </TouchableOpacity>
-          );
-        })()}
+        {/* ── Estimador de renta ── */}
+        <DianSection />
+
+        {/* ── Copia de seguridad y resumen de ingresos ── */}
+        <MyDataSection onRestored={load} />
 
         {/* ── Config vehículo ── */}
         <TouchableOpacity style={s.configBtn} onPress={() => setShowConfig(v => !v)}>
@@ -474,12 +445,6 @@ const s = StyleSheet.create({
   ppHint:        { color: '#555', fontSize: 11, marginTop: 6 },
 
   // DIAN
-  dianStatus:    { fontSize: 14, fontWeight: '600', marginTop: 4 },
-  dianDetail:    { backgroundColor: '#222', borderRadius: 12, padding: 12, marginTop: 12 },
-  bRow:          { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 5 },
-  bLabel:        { color: '#aaa', fontSize: 13, flex: 1 },
-  bValW:         { color: '#fff', fontSize: 13, fontWeight: '600' },
-  dianDisclaimer:{ color: '#666', fontSize: 11, marginTop: 10, fontStyle: 'italic', lineHeight: 16 },
 
   // Config
   configBtn:     { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#1a1a1a', borderRadius: 18, padding: 16, marginBottom: 10 },

@@ -1,5 +1,5 @@
 import * as SQLite from 'expo-sqlite';
-import { RENT_CATEGORY, TransactionType } from './categories';
+import { RENT_CATEGORY, CHARGE_CATEGORY, TransactionType } from './categories';
 import { VEHICLE_PRESETS, DEFAULT_PLANS, EnergyType } from './fleet';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -133,6 +133,23 @@ export interface VehicleDoc {
   kind: string;
   due_date: string | null;
   cost: number | null;
+}
+
+export interface Charge {
+  id: number;
+  vehicle_id: number;
+  date: string;
+  kwh: number | null;
+  amount: number;
+  place: string | null;
+  transaction_id: number | null;
+}
+
+// Jornada: de "Empecemos el día" a "Día finalizado", en hora local "YYYY-MM-DD HH:MM"
+export interface WorkSession {
+  id: number;
+  start_at: string;
+  end_at: string | null;
 }
 
 // ─── Singleton ───────────────────────────────────────────────────────────────
@@ -327,7 +344,33 @@ const MIGRATIONS: ((db: SQLite.SQLiteDatabase) => void)[] = [
       CREATE INDEX IF NOT EXISTS idx_rental_payments_rental ON rental_payments(rental_id);
     `);
   },
+
+  /* 3: cargas del carro eléctrico y horas de trabajo */ db => {
+    db.execSync(`
+      CREATE TABLE IF NOT EXISTS charges (
+        id             INTEGER PRIMARY KEY AUTOINCREMENT,
+        vehicle_id     INTEGER NOT NULL,
+        date           TEXT    NOT NULL,
+        kwh            REAL,
+        amount         REAL    NOT NULL,
+        place          TEXT,
+        transaction_id INTEGER,
+        active         INTEGER NOT NULL DEFAULT 1
+      );
+      CREATE INDEX IF NOT EXISTS idx_charges_vehicle ON charges(vehicle_id, date);
+
+      CREATE TABLE IF NOT EXISTS work_sessions (
+        id       INTEGER PRIMARY KEY AUTOINCREMENT,
+        start_at TEXT    NOT NULL,
+        end_at   TEXT
+      );
+    `);
+  },
 ];
+
+export function getSchemaVersion(): number {
+  return getDb().getFirstSync<{ user_version: number }>('PRAGMA user_version')?.user_version ?? 0;
+}
 
 function runMigrations(db: SQLite.SQLiteDatabase): void {
   const row = db.getFirstSync<{ user_version: number }>('PRAGMA user_version');
@@ -408,6 +451,22 @@ export function addTransaction(
     'INSERT INTO transactions (type, amount, category, note, date) VALUES (?, ?, ?, ?, ?)',
     type, amount, category, note, date
   );
+}
+
+// Total por tipo y categoría entre dos fechas (incluidas)
+export function getCategoryTotals(from: string, to: string): { type: TransactionType; category: string; total: number }[] {
+  return getDb().getAllSync<{ type: TransactionType; category: string; total: number }>(
+    `SELECT type, category, SUM(amount) AS total FROM transactions
+     WHERE date BETWEEN ? AND ? GROUP BY type, category`,
+    from, to
+  );
+}
+
+// Fecha del primer movimiento desde `from`; null si no hay ninguno
+export function getFirstTransactionDate(from: string): string | null {
+  return getDb().getFirstSync<{ d: string | null }>(
+    'SELECT MIN(date) AS d FROM transactions WHERE date >= ?', from
+  )?.d ?? null;
 }
 
 export function deleteTransaction(id: number): void {
@@ -772,6 +831,61 @@ function insertRentalPayment(
   db.runSync(
     'INSERT INTO rental_payments (rental_id, kind, amount, date, note, transaction_id) VALUES (?, ?, ?, ?, ?, ?)',
     rental.id, kind, amount, date, note, txId
+  );
+}
+
+// ─── Cargas (carro eléctrico) ─────────────────────────────────────────────────
+
+// La carga se anota como gasto ⚡ del día y, aparte, con sus kWh y el lugar para sacar el precio real
+export function addCharge(
+  vehicleId: number, amount: number, kwh: number | null, place: string | null, note: string | null, date: string,
+): void {
+  const db = getDb();
+  const kwhTxt = kwh ? `${String(kwh).replace('.', ',')} kWh` : null;
+  const txNote = [kwhTxt, place, note].filter(Boolean).join(' · ') || null;
+  db.withTransactionSync(() => {
+    const { lastInsertRowId } = db.runSync(
+      'INSERT INTO transactions (type, amount, category, note, date) VALUES (?, ?, ?, ?, ?)',
+      'expense', amount, CHARGE_CATEGORY, txNote, date
+    );
+    db.runSync(
+      'INSERT INTO charges (vehicle_id, date, kwh, amount, place, transaction_id) VALUES (?, ?, ?, ?, ?, ?)',
+      vehicleId, date, kwh, amount, place, lastInsertRowId
+    );
+  });
+}
+
+// Solo las cargas cuyo gasto sigue existiendo (si se borra desde Hoy, deja de contar)
+export function getCharges(vehicleId: number, from: string): Charge[] {
+  return getDb().getAllSync<Charge>(
+    `SELECT c.id, c.vehicle_id, c.date, c.kwh, c.amount, c.place, c.transaction_id
+     FROM charges c JOIN transactions t ON t.id = c.transaction_id
+     WHERE c.vehicle_id = ? AND c.active = 1 AND c.date >= ?
+     ORDER BY c.date DESC, c.id DESC`,
+    vehicleId, from
+  );
+}
+
+// ─── Jornadas ─────────────────────────────────────────────────────────────────
+
+export function startWorkSession(at: string): void {
+  getDb().runSync('INSERT INTO work_sessions (start_at) VALUES (?)', at);
+}
+
+// Cierra la última jornada si sigue abierta (si no hay, no hace nada)
+export function endWorkSession(at: string): void {
+  getDb().runSync(
+    `UPDATE work_sessions SET end_at = ?
+     WHERE id = (SELECT MAX(id) FROM work_sessions) AND end_at IS NULL`,
+    at
+  );
+}
+
+// Jornadas que empezaron entre dos fechas (incluidas)
+export function getWorkSessions(from: string, to: string): WorkSession[] {
+  return getDb().getAllSync<WorkSession>(
+    'SELECT * FROM work_sessions WHERE substr(start_at, 1, 10) BETWEEN ? AND ? ORDER BY start_at ASC',
+    from, to
   );
 }
 

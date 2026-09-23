@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { View, StyleSheet, Modal, StatusBar, TouchableOpacity, Text, ActivityIndicator, Linking } from 'react-native';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { initDatabase } from './src/db';
-import { setupNotifications, refreshVehicleReminders } from './src/notifications';
+import { setupNotifications, refreshVehicleReminders, refreshBackupReminder } from './src/notifications';
 import { applyOtaUpdateIfAvailable, isNewApkAvailable, APK_URL } from './src/updates';
 import TodayScreen from './components/TodayScreen';
 import HistoryScreen from './components/HistoryScreen';
@@ -42,6 +42,7 @@ function AppContent() {
     if (!ready) return;
     isNewApkAvailable().then(setNewApk);
     refreshVehicleReminders().catch(() => {});  // SOAT, técnico-mecánica, etc.
+    refreshBackupReminder().catch(() => {});    // copia de seguridad semanal
   }, [ready]);
 
   if (!ready) {

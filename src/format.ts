@@ -100,3 +100,17 @@ export function daysBetween(from: string, to: string): number {
 export function formatKm(km: number): string {
   return Math.round(km).toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.');
 }
+
+// Fecha y hora local "2026-09-22 18:05" (jornadas y respaldos)
+export function nowString(): string {
+  const d = new Date();
+  return `${formatDateStr(d)} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
+// "2026-09" → "septiembre 2026"
+export function formatMonth(yearMonth: string): string {
+  const [year, month] = yearMonth.split('-').map(Number);
+  const months = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio',
+    'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
+  return `${months[month - 1]} ${year}`;
+}

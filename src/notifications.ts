@@ -3,12 +3,14 @@ import { Platform } from 'react-native';
 import { getVehicles, getVehicleDocs, getMaintenancePlans, getMaintenance, getCurrentRental, getRentalPayments } from './db';
 import { DOC_KINDS, planStatus, maintenanceLabel } from './fleet';
 import { rentStatus } from './rental';
+import { nextBackupReminder } from './backupData';
 import { addDays, formatCurrency, formatDate, todayString } from './format';
 
 const CHANNEL_ID       = 'uber-finanzas-reminders';
 const INTERVAL_HOURS   = 2;
 const MAX_REMINDERS    = 8; // hasta 16 horas de jornada
 const VEHICLE_KIND     = 'vehicle'; // marca de los avisos de carros (no son de la jornada)
+const BACKUP_KIND      = 'backup';  // marca del aviso de copia de seguridad (tampoco es de la jornada)
 
 // ── Configura cómo se muestran las notificaciones cuando la app está abierta ──
 Notifications.setNotificationHandler({
@@ -82,18 +84,26 @@ export async function endWorkDay(): Promise<void> {
 // ── ¿Hay jornada activa? ──────────────────────────────────────────────────────
 export async function isWorkDayActive(): Promise<boolean> {
   const scheduled = await Notifications.getAllScheduledNotificationsAsync();
-  return scheduled.some(n => !isVehicleReminder(n));
+  return scheduled.some(isWorkDayReminder);
 }
 
-// Todo lo que no es aviso de carro es de la jornada (incluye los programados antes de existir la marca)
 function isVehicleReminder(n: Notifications.NotificationRequest): boolean {
   return n.content.data?.kind === VEHICLE_KIND;
+}
+
+function isBackupReminder(n: Notifications.NotificationRequest): boolean {
+  return n.content.data?.kind === BACKUP_KIND;
+}
+
+// Todo lo que no tiene marca es de la jornada (incluye los programados antes de existir las marcas)
+function isWorkDayReminder(n: Notifications.NotificationRequest): boolean {
+  return !isVehicleReminder(n) && !isBackupReminder(n);
 }
 
 async function cancelWorkDayNotifications(): Promise<void> {
   const scheduled = await Notifications.getAllScheduledNotificationsAsync();
   await Promise.all(scheduled
-    .filter(n => !isVehicleReminder(n))
+    .filter(isWorkDayReminder)
     .map(n => Notifications.cancelScheduledNotificationAsync(n.identifier)));
 }
 
@@ -150,4 +160,23 @@ export async function refreshVehicleReminders(): Promise<void> {
       trigger: { type: Notifications.SchedulableTriggerInputTypes.DATE, date: when },
     });
   }
+}
+
+// ── Aviso de copia de seguridad ───────────────────────────────────────────────
+// Uno solo programado a la vez; se reprograma al abrir la app y después de cada copia.
+export async function refreshBackupReminder(): Promise<void> {
+  const scheduled = await Notifications.getAllScheduledNotificationsAsync();
+  await Promise.all(scheduled
+    .filter(isBackupReminder)
+    .map(n => Notifications.cancelScheduledNotificationAsync(n.identifier)));
+  const when = nextBackupReminder(new Date(), todayString());
+  await Notifications.scheduleNotificationAsync({
+    content: {
+      title: '💾 Guarda una copia de tus datos',
+      body:  'Si se pierde o se daña el celular, con la copia no pierdes nada. Ve a 💰 Balance → Copia de seguridad.',
+      sound: true,
+      data:  { kind: BACKUP_KIND },
+    },
+    trigger: { type: Notifications.SchedulableTriggerInputTypes.DATE, date: when },
+  });
 }
