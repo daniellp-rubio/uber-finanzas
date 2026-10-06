@@ -5,7 +5,7 @@ import {
   Vehicle, Rental, RentalInput, RentalPayment,
 } from '../src/db';
 import {
-  RENTAL_DEFAULTS, GRACE_DAYS, RECOVER_DAY, PAYMENT_KINDS, rentStatus, describeRent, kmStatus,
+  RENTAL_DEFAULTS, GRACE_DAYS, MAX_LATE_DAYS, RECOVER_DAY, PAYMENT_KINDS, rentStatus, describeRent, kmStatus,
   collectedInMonth, payDayName, paymentLabel, paymentIcon,
 } from '../src/rental';
 import { formatCurrency, formatDate, formatLongDate, formatKm, todayString } from '../src/format';
@@ -109,7 +109,7 @@ export default function RentalSection({ vehicle, rental, payments, isActive, onC
         )}
         {st.lateFee > 0 && (
           <Text style={rs.statusSub}>
-            Mora según el contrato: {formatCurrency(st.lateFee)} ({formatCurrency(rental.late_fee_per_day)} por día después de la gracia)
+            Mora según el contrato: {formatCurrency(st.lateFee)} ({formatCurrency(rental.late_fee_per_day)} por día después de la gracia, máximo {MAX_LATE_DAYS} días por cuota)
           </Text>
         )}
         {st.canRecover && (
@@ -302,7 +302,7 @@ function RentalFormModal({ vehicle, rental, canDelete, onClose, onSaved }: {
 
       <Text style={ms.mLabel}>MORA POR DÍA DE ATRASO</Text>
       <TextInput style={ms.mInput} value={showNum(lateFee)} onChangeText={t => setLateFee(digits(t))} keyboardType="number-pad" placeholder="$ 0" placeholderTextColor="#444" />
-      <Text style={ms.mHint}>Se cobra después de la gracia. Al día {RECOVER_DAY} de atraso el contrato debe permitir recoger el carro.</Text>
+      <Text style={ms.mHint}>Se cobra después de la gracia, máximo {MAX_LATE_DAYS} días por cada cuota. Al día {RECOVER_DAY} de atraso el contrato debe permitir recoger el carro.</Text>
 
       <Text style={ms.mLabel}>DEPÓSITO</Text>
       <TextInput style={ms.mInput} value={showNum(deposit)} onChangeText={t => setDeposit(digits(t))} keyboardType="number-pad" placeholder="$ 0" placeholderTextColor="#444" />

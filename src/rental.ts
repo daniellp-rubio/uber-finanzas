@@ -4,17 +4,18 @@ import { addDays, daysBetween, formatCurrency } from './format';
 
 // Solo constantes y cálculos puros del arriendo: sin acceso a la DB
 
-// ─── Contrato recomendado (investigado 2026-09, ver references/arquitectura.md) ──
+// ─── Contrato de arriendo de la Duster (v2, 2026-09-28; ver references/arquitectura.md) ──
 
 export const RENTAL_DEFAULTS = {
-  weeklyFee:     600000,   // prepagada, cada 7 días desde el día de entrega
+  weeklyFee:     550000,   // canon prepagado, cada 7 días desde el día de entrega
   deposit:       1200000,  // se devuelve al terminar, menos multas y daños
-  kmPerWeek:     1200,     // km incluidos por semana
+  kmPerWeek:     1800,     // km incluidos por semana, acumulables
   extraKmPrice:  250,      // COP por km de más
-  lateFeePerDay: 30000,    // mora por día, después de la gracia
+  lateFeePerDay: 30000,    // pena por día de retraso, después de la gracia
 };
 
-export const GRACE_DAYS      = 1;        // 24 h para pagar sin mora
+export const GRACE_DAYS      = 1;        // 24 h para pagar sin pena
+export const MAX_LATE_DAYS   = 7;        // la pena se cobra máximo 7 días por cada cuota
 export const RECOVER_DAY     = 3;        // al día 3 de atraso el contrato permite recoger el carro
 export const WEEKS_PER_MONTH = 52 / 12;  // 4,33
 export const WORK_DAYS_MONTH = 24;       // igual que el objetivo diario de Balance
@@ -81,17 +82,26 @@ export function rentStatus(r: Rental, payments: RentalPayment[], today: string):
   }
 
   const daysLate = Math.max(daysBetween(nextDue, today), 0);
-  const lateDays = Math.max(daysLate - GRACE_DAYS, 0);
+
+  // Pena del contrato: cada cuota sin pagar completa suma desde el día siguiente a la gracia
+  // hasta hoy o hasta la devolución del carro, con un máximo de MAX_LATE_DAYS días por cuota
+  const feeUntil = r.end_date && r.end_date < today ? r.end_date : today;
+  let lateDays = 0;
+  for (let k = covered; k < weeksDue; k++) {
+    const late = daysBetween(addDays(r.start_date, 7 * k), feeUntil) - GRACE_DAYS;
+    lateDays += Math.min(Math.max(late, 0), MAX_LATE_DAYS);
+  }
+
   return {
     weeksDue, paidRent, owed, nextDue, daysLate,
     lateFee:    lateDays * r.late_fee_per_day,
     canRecover: !r.end_date && daysLate >= RECOVER_DAY,
     depositPaid,
-    level:      lateDays > 0 ? 'red' : 'yellow',
+    level:      daysLate > GRACE_DAYS ? 'red' : 'yellow',
   };
 }
 
-// "Debe $600.000 · 2 días de atraso", "Hoy paga $600.000", "Al día"
+// "Debe $550.000 · 2 días de atraso", "Hoy paga $550.000", "Al día"
 export function describeRent(st: RentStatus): string {
   if (st.level === 'ok') return st.owed < 0 ? `Al día · adelantó ${formatCurrency(-st.owed)}` : 'Al día';
   if (st.daysLate === 0) return `Hoy paga ${formatCurrency(st.owed)}`;
