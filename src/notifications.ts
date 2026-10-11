@@ -2,7 +2,7 @@ import * as Notifications from 'expo-notifications';
 import { Platform } from 'react-native';
 import { getVehicles, getVehicleDocs, getMaintenancePlans, getMaintenance, getCurrentRental, getRentalPayments } from './db';
 import { DOC_KINDS, planStatus, maintenanceLabel } from './fleet';
-import { rentStatus } from './rental';
+import { rentStatus, firstPayDate, firstInstallment } from './rental';
 import { nextBackupReminder } from './backupData';
 import { addDays, formatCurrency, formatDate, todayString } from './format';
 
@@ -137,15 +137,19 @@ export async function refreshVehicleReminders(): Promise<void> {
       items.push({ date: addDays(st.nextDate, -7), title: '🔧 Mantenimiento en 7 días', body });
     }
 
-    // Arriendo: el día de cada una de las próximas 4 cuotas sin pagar
+    // Arriendo: el día de cada una de las próximas 4 cuotas sin pagar. Si falta la primera
+    // (parcial, del día de la entrega), las siguientes caen en el día de pago del contrato.
     const rental = getCurrentRental(v.id);
     if (rental) {
       const st = rentStatus(rental, getRentalPayments(rental.id), today);
+      const payDay = firstPayDate(rental);
+      const first  = st.nextDue && st.nextDue < payDay ? st.nextDue : null;
       for (let i = 0; st.nextDue && i < 4; i++) {
+        const date = first ? (i === 0 ? first : addDays(payDay, 7 * (i - 1))) : addDays(st.nextDue, 7 * i);
         items.push({
-          date:  addDays(st.nextDue, 7 * i),
+          date,
           title: '🔑 Hoy paga el arriendo',
-          body:  `${rental.driver_name} (${v.name}): cuota de ${formatCurrency(rental.weekly_fee)}.`,
+          body:  `${rental.driver_name} (${v.name}): cuota de ${formatCurrency(date === first ? firstInstallment(rental).amount : rental.weekly_fee)}.`,
         });
       }
     }

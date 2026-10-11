@@ -6,18 +6,35 @@ import {
 } from '../src/db';
 import {
   RENTAL_DEFAULTS, GRACE_DAYS, MAX_LATE_DAYS, RECOVER_DAY, PAYMENT_KINDS, rentStatus, describeRent, kmStatus,
-  collectedInMonth, payDayName, paymentLabel, paymentIcon,
+  collectedInMonth, payDayName, paymentLabel, paymentIcon, weekdayOf, firstPayDate, firstPayDateFor, firstInstallment,
 } from '../src/rental';
-import { formatCurrency, formatDate, formatLongDate, formatKm, todayString } from '../src/format';
+import { addDays, formatCurrency, formatDate, formatLongDate, formatKm, todayString } from '../src/format';
 import { requestNotificationPermission } from '../src/notifications';
 import DateField from './DateField';
 import SheetFrame, { ms } from './SheetFrame';
 
 const LEVEL_COLOR = { red: '#F44336', yellow: '#FFC107', ok: '#00C853', unknown: '#666' };
 
+// Lunes primero, como en el calendario de Colombia (índices de Date.getDay)
+const WEEK_CHIPS = [[1, 'Lun'], [2, 'Mar'], [3, 'Mié'], [4, 'Jue'], [5, 'Vie'], [6, 'Sáb'], [0, 'Dom']] as const;
+
 // Montos: el input guarda solo dígitos y muestra con puntos
 const digits  = (t: string) => t.replace(/\D/g, '');
 const showNum = (raw: string) => (raw ? Number(raw).toLocaleString('es-CO') : '');
+
+// Qué paga el día de la entrega y desde cuándo paga la cuota completa
+function payDayHint(start: string | null, payDay: number | null, fee: number): string {
+  if (!start) return 'Escoge primero la fecha de entrega.';
+  const grace = `Tiene ${GRACE_DAYS * 24} horas de gracia.`;
+  if (payDay === null || payDay === weekdayOf(start)) {
+    return `Paga el día de la entrega por adelantado y después cada 7 días (los ${payDayName(start)}). ${grace}`;
+  }
+  const first = firstPayDateFor(start, payDay);
+  const { days, amount } = firstInstallment({ start_date: start, first_pay_date: first, weekly_fee: fee });
+  return `El día de la entrega paga ${formatCurrency(amount)} por ${days} ${days === 1 ? 'día' : 'días'}, hasta el ` +
+    `${formatLongDate(addDays(first, -1))}. Después paga ${formatCurrency(fee)} los ${payDayName(first)} por adelantado, ` +
+    `desde el ${formatLongDate(first)}. ${grace}`;
+}
 
 interface Props {
   vehicle:   Vehicle;
@@ -98,7 +115,7 @@ export default function RentalSection({ vehicle, rental, payments, isActive, onC
         )}
       </View>
       <Text style={rs.terms}>
-        {formatCurrency(rental.weekly_fee)} por semana · paga los {payDayName(rental.start_date)} · desde el {formatDate(rental.start_date)}
+        {formatCurrency(rental.weekly_fee)} por semana · paga los {payDayName(firstPayDate(rental))} · desde el {formatDate(rental.start_date)}
       </Text>
 
       {/* ── Estado de pagos ── */}
@@ -206,6 +223,9 @@ function RentalFormModal({ vehicle, rental, canDelete, onClose, onSaved }: {
   const [phone, setPhone]     = useState(rental?.driver_phone ?? '');
   const [fee, setFee]         = useState(String(rental?.weekly_fee ?? d.weeklyFee));
   const [start, setStart]     = useState<string | null>(rental?.start_date ?? todayString());
+  // null = paga el mismo día de la semana de la entrega
+  const [payDay, setPayDay]   = useState<number | null>(
+    rental && firstPayDate(rental) !== rental.start_date ? weekdayOf(firstPayDate(rental)) : null);
   const [startKm, setStartKm] = useState(
     rental ? (rental.start_km !== null ? String(rental.start_km) : '')
            : (vehicle.odometer_km !== null ? String(Math.round(vehicle.odometer_km)) : ''));
@@ -228,12 +248,14 @@ function RentalFormModal({ vehicle, rental, canDelete, onClose, onSaved }: {
       Alert.alert('Revisa la fecha', 'Escribe la fecha de entrega completa: día/mes/año.');
       return;
     }
+    const firstPay = payDay === null ? start : firstPayDateFor(start, payDay);
     const input: RentalInput = {
       vehicle_id:       vehicle.id,
       driver_name:      name.trim(),
       driver_phone:     phone.trim() || null,
       weekly_fee:       Number(fee),
       start_date:       start,
+      first_pay_date:   firstPay === start ? null : firstPay,
       start_km:         Number(startKm) > 0 ? Number(startKm) : null,
       km_per_week:      Number(kmWeek) > 0 ? Number(kmWeek) : null,
       extra_km_price:   Number(kmPrice) || 0,
@@ -282,9 +304,20 @@ function RentalFormModal({ vehicle, rental, canDelete, onClose, onSaved }: {
 
       <Text style={ms.mLabel}>FECHA DE ENTREGA</Text>
       <DateField value={start} onChange={setStart} />
-      <Text style={ms.mHint}>
-        Paga ese día por adelantado y después cada 7 días{start ? ` (los ${payDayName(start)})` : ''}. Tiene {GRACE_DAYS * 24} horas de gracia.
-      </Text>
+
+      <Text style={ms.mLabel}>DÍA DE PAGO</Text>
+      <View style={ms.mGrid}>
+        {WEEK_CHIPS.map(([wd, label]) => {
+          const on = start ? (payDay ?? weekdayOf(start)) === wd : false;
+          return (
+            <TouchableOpacity key={wd} style={[ms.mChip, on && ms.mChipOn]}
+              onPress={() => setPayDay(start && wd === weekdayOf(start) ? null : wd)}>
+              <Text style={[ms.mChipTxt, on && ms.mChipTxtOn]}>{label}</Text>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+      <Text style={ms.mHint}>{payDayHint(start, payDay, Number(fee))}</Text>
 
       <Text style={ms.mLabel}>KILOMETRAJE AL ENTREGARLO</Text>
       <TextInput style={ms.mInput} value={showNum(startKm)} onChangeText={t => setStartKm(digits(t))} keyboardType="number-pad" placeholder="Lo que marca el tablero" placeholderTextColor="#444" />
