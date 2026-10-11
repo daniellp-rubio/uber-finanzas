@@ -4,11 +4,11 @@ import { addDays, daysBetween, formatCurrency } from './format';
 
 // Solo constantes y cálculos puros del arriendo: sin acceso a la DB
 
-// ─── Contrato de arriendo de la Duster (v2, 2026-09-28; ver references/arquitectura.md) ──
+// ─── Contrato de arriendo de la Duster (v4, 2026-10-11; ver references/arquitectura.md) ──
 
 export const RENTAL_DEFAULTS = {
   weeklyFee:     550000,   // canon prepagado cada 7 días desde el primer día de pago
-  deposit:       1200000,  // se devuelve al terminar, menos multas y daños
+  deposit:       550000,   // de contado al entregar; se devuelve al terminar, menos multas y daños
   kmPerWeek:     1800,     // km incluidos por semana, acumulables
   extraKmPrice:  250,      // COP por km de más
   lateFeePerDay: 30000,    // pena por día de retraso, después de la gracia
