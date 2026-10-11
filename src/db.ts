@@ -79,9 +79,10 @@ export interface Rental {
   vehicle_id: number;
   driver_name: string;
   driver_phone: string | null;
-  weekly_fee: number;             // cuota prepagada cada 7 días desde el primer día de pago
+  weekly_fee: number;             // cuota cada 7 días desde el primer día de pago
   start_date: string;
   first_pay_date: string | null;  // primer día de pago si no cae el día de la entrega (NULL = start_date); la primera cuota cubre solo los días hasta ahí
+  in_arrears: number;             // 1 = semana vencida (paga al terminar cada semana); 0 = por adelantado
   start_km: number | null;        // kilometraje al entregar el carro
   km_per_week: number | null;     // km incluidos por semana (NULL = sin límite)
   extra_km_price: number;         // COP por km de más
@@ -370,6 +371,10 @@ const MIGRATIONS: ((db: SQLite.SQLiteDatabase) => void)[] = [
 
   /* 4: día de pago distinto al de la entrega */ db => {
     db.execSync('ALTER TABLE rentals ADD COLUMN first_pay_date TEXT;');
+  },
+
+  /* 5: canon por semana vencida */ db => {
+    db.execSync('ALTER TABLE rentals ADD COLUMN in_arrears INTEGER NOT NULL DEFAULT 0;');
   },
 ];
 
@@ -752,10 +757,10 @@ export function addRental(r: RentalInput): number {
   let id = 0;
   db.withTransactionSync(() => {
     id = db.runSync(
-      `INSERT INTO rentals (vehicle_id, driver_name, driver_phone, weekly_fee, start_date, first_pay_date, start_km,
+      `INSERT INTO rentals (vehicle_id, driver_name, driver_phone, weekly_fee, start_date, first_pay_date, in_arrears, start_km,
          km_per_week, extra_km_price, late_fee_per_day, deposit, note)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      r.vehicle_id, r.driver_name, r.driver_phone, r.weekly_fee, r.start_date, r.first_pay_date, r.start_km,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      r.vehicle_id, r.driver_name, r.driver_phone, r.weekly_fee, r.start_date, r.first_pay_date, r.in_arrears, r.start_km,
       r.km_per_week, r.extra_km_price, r.late_fee_per_day, r.deposit, r.note
     ).lastInsertRowId;
     if (r.start_km !== null) raiseOdometer(r.vehicle_id, r.start_km, r.start_date);
@@ -765,10 +770,10 @@ export function addRental(r: RentalInput): number {
 
 export function updateRental(id: number, r: RentalInput): void {
   getDb().runSync(
-    `UPDATE rentals SET driver_name = ?, driver_phone = ?, weekly_fee = ?, start_date = ?, first_pay_date = ?, start_km = ?,
-       km_per_week = ?, extra_km_price = ?, late_fee_per_day = ?, deposit = ?, note = ?
+    `UPDATE rentals SET driver_name = ?, driver_phone = ?, weekly_fee = ?, start_date = ?, first_pay_date = ?, in_arrears = ?,
+       start_km = ?, km_per_week = ?, extra_km_price = ?, late_fee_per_day = ?, deposit = ?, note = ?
      WHERE id = ?`,
-    r.driver_name, r.driver_phone, r.weekly_fee, r.start_date, r.first_pay_date, r.start_km,
+    r.driver_name, r.driver_phone, r.weekly_fee, r.start_date, r.first_pay_date, r.in_arrears, r.start_km,
     r.km_per_week, r.extra_km_price, r.late_fee_per_day, r.deposit, r.note, id
   );
 }

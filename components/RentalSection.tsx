@@ -22,14 +22,25 @@ const WEEK_CHIPS = [[1, 'Lun'], [2, 'Mar'], [3, 'Mié'], [4, 'Jue'], [5, 'Vie'],
 const digits  = (t: string) => t.replace(/\D/g, '');
 const showNum = (raw: string) => (raw ? Number(raw).toLocaleString('es-CO') : '');
 
-// Qué paga el día de la entrega y desde cuándo paga la cuota completa
-function payDayHint(start: string | null, payDay: number | null, fee: number): string {
+// Qué paga y cuándo, según el día de pago y si paga por adelantado o al terminar la semana
+function payDayHint(start: string | null, payDay: number | null, fee: number, arrears: boolean): string {
   if (!start) return 'Escoge primero la fecha de entrega.';
   const grace = `Tiene ${GRACE_DAYS * 24} horas de gracia.`;
-  if (payDay === null || payDay === weekdayOf(start)) {
+  const sameDay = payDay === null || payDay === weekdayOf(start);
+  const first = sameDay ? start : firstPayDateFor(start, payDay);
+  if (arrears) {
+    if (sameDay) {
+      return `Paga ${formatCurrency(fee)} los ${payDayName(start)} por la semana que ya usó: el primer pago es el ` +
+        `${formatLongDate(addDays(start, 7))}. ${grace}`;
+    }
+    const { days, amount } = firstInstallment({ start_date: start, first_pay_date: first, weekly_fee: fee });
+    return `El primer pago es el ${formatLongDate(first)}: ${formatCurrency(amount)} por los ${days} ` +
+      `${days === 1 ? 'día' : 'días'} desde la entrega. Después paga ${formatCurrency(fee)} los ${payDayName(first)} ` +
+      `por la semana que ya usó. ${grace}`;
+  }
+  if (sameDay) {
     return `Paga el día de la entrega por adelantado y después cada 7 días (los ${payDayName(start)}). ${grace}`;
   }
-  const first = firstPayDateFor(start, payDay);
   const { days, amount } = firstInstallment({ start_date: start, first_pay_date: first, weekly_fee: fee });
   return `El día de la entrega paga ${formatCurrency(amount)} por ${days} ${days === 1 ? 'día' : 'días'}, hasta el ` +
     `${formatLongDate(addDays(first, -1))}. Después paga ${formatCurrency(fee)} los ${payDayName(first)} por adelantado, ` +
@@ -117,7 +128,7 @@ export default function RentalSection({ vehicle, rental, payments, isActive, onC
         )}
       </View>
       <Text style={rs.terms}>
-        {formatCurrency(rental.weekly_fee)} por semana · paga los {payDayName(firstPayDate(rental))} · desde el {formatDate(rental.start_date)}
+        {formatCurrency(rental.weekly_fee)} por semana{rental.in_arrears ? ' vencida' : ''} · paga los {payDayName(firstPayDate(rental))} · desde el {formatDate(rental.start_date)}
       </Text>
 
       {/* ── Estado de pagos ── */}
@@ -230,6 +241,8 @@ function RentalFormModal({ vehicle, rental, canDelete, onClose, onSaved }: {
   // null = paga el mismo día de la semana de la entrega
   const [payDay, setPayDay]   = useState<number | null>(
     rental && firstPayDate(rental) !== rental.start_date ? weekdayOf(firstPayDate(rental)) : null);
+  // Nuevo contrato: semana vencida por defecto (contrato de la Duster v4)
+  const [arrears, setArrears] = useState(rental ? rental.in_arrears === 1 : true);
   const [startKm, setStartKm] = useState(
     rental ? (rental.start_km !== null ? String(rental.start_km) : '')
            : (vehicle.odometer_km !== null ? String(Math.round(vehicle.odometer_km)) : ''));
@@ -260,6 +273,7 @@ function RentalFormModal({ vehicle, rental, canDelete, onClose, onSaved }: {
       weekly_fee:       Number(fee),
       start_date:       start,
       first_pay_date:   firstPay === start ? null : firstPay,
+      in_arrears:       arrears ? 1 : 0,
       start_km:         Number(startKm) > 0 ? Number(startKm) : null,
       km_per_week:      Number(kmWeek) > 0 ? Number(kmWeek) : null,
       extra_km_price:   Number(kmPrice) || 0,
@@ -320,7 +334,17 @@ function RentalFormModal({ vehicle, rental, canDelete, onClose, onSaved }: {
           );
         })}
       </View>
-      <Text style={ms.mHint}>{payDayHint(start, payDay, Number(fee))}</Text>
+      <Text style={ms.mHint}>{payDayHint(start, payDay, Number(fee), arrears)}</Text>
+
+      <Text style={ms.mLabel}>¿CUÁNDO PAGA?</Text>
+      <View style={ms.mGrid}>
+        <TouchableOpacity style={[ms.mChip, arrears && ms.mChipOn]} onPress={() => setArrears(true)}>
+          <Text style={[ms.mChipTxt, arrears && ms.mChipTxtOn]}>Al terminar la semana</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={[ms.mChip, !arrears && ms.mChipOn]} onPress={() => setArrears(false)}>
+          <Text style={[ms.mChipTxt, !arrears && ms.mChipTxtOn]}>Por adelantado</Text>
+        </TouchableOpacity>
+      </View>
 
       <Text style={ms.mLabel}>KILOMETRAJE AL ENTREGARLO</Text>
       <TextInput style={ms.mInput} value={showNum(startKm)} onChangeText={t => setStartKm(digits(t))} keyboardType="number-pad" placeholder="Lo que marca el tablero" placeholderTextColor="#444" />
