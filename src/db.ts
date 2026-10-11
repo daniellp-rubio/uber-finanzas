@@ -98,7 +98,7 @@ export type RentalInput = Omit<Rental, 'id' | 'end_date' | 'deposit_returned' | 
 export interface RentalPayment {
   id: number;
   rental_id: number;
-  kind: 'rent' | 'fee' | 'deposit';  // cuota semanal / mora, km extra o daños / depósito
+  kind: 'rent' | 'fee' | 'deposit' | 'credit';  // cuota / mora, km extra o daños / depósito / días sin cobrar (sin ingreso)
   amount: number;
   date: string;
   note: string | null;
@@ -778,10 +778,12 @@ export function deleteRental(id: number): void {
   getDb().runSync('UPDATE rentals SET active = 0 WHERE id = ?', id);
 }
 
-// Devolución del carro. Lo que se queda del depósito (multas, daños) entra como ingreso 🔑.
+// Devolución del carro. Lo que se queda del depósito (multas, daños) entra como ingreso 🔑. Los días
+// pagados y no usados que se le devuelven (cl. 20f) salen como gasto 📦 del día: un ingreso negativo
+// se vería con "+" en Hoy.
 export function endRental(
   rental: Rental, vehicleName: string, endDate: string, endKm: number | null,
-  depositPaid: number, depositReturned: number,
+  depositPaid: number, depositReturned: number, unusedRefund: number,
 ): void {
   const db = getDb();
   db.withTransactionSync(() => {
@@ -789,6 +791,12 @@ export function endRental(
     const kept = depositPaid - depositReturned;
     if (kept > 0) {
       insertRentalPayment(db, rental, 'fee', kept, endDate, 'Parte del depósito que no se devolvió', `Depósito retenido · ${vehicleName}`);
+    }
+    if (unusedRefund > 0) {
+      db.runSync(
+        'INSERT INTO transactions (type, amount, category, note, date) VALUES (?, ?, ?, ?, ?)',
+        'expense', unusedRefund, 'other', `Devolución de días de arriendo no usados · ${vehicleName}`, endDate
+      );
     }
     if (endKm !== null) raiseOdometer(rental.vehicle_id, endKm, endDate);
   });

@@ -24,6 +24,7 @@ export const PAYMENT_KINDS: { id: RentalPayment['kind']; label: string; icon: st
   { id: 'rent',    label: 'Cuota semanal',          icon: '🔑' },
   { id: 'fee',     label: 'Mora, km extra o daños', icon: '⚠️' },
   { id: 'deposit', label: 'Depósito',               icon: '🔒' },
+  { id: 'credit',  label: 'Días sin cobrar',        icon: '⏸️' },
 ];
 
 export function paymentLabel(kind: string): string {
@@ -92,18 +93,24 @@ function installmentsDueUntil(r: Rental, asOf: string): number {
   return (pay === r.start_date ? 0 : 1) + Math.floor(daysBetween(pay, asOf) / 7) + 1;
 }
 
-// Lo que suman las primeras n cuotas
-function totalDue(r: Rental, n: number): number {
-  if (n <= 0) return 0;
-  return firstInstallment(r).amount + (n - 1) * r.weekly_fee;
+// Valor de la cuota k: cuota × días que cubre / 7. La primera puede ser parcial (día de pago
+// distinto al de la entrega) y, con el carro devuelto antes de la siguiente cuota, la última
+// se cobra solo por los días que lo tuvo (cláusulas 5b y 20f del contrato)
+function installmentAmount(r: Rental, k: number): number {
+  const next  = installmentDate(r, k + 1);
+  const until = r.end_date && r.end_date < next ? r.end_date : next;
+  return Math.round(r.weekly_fee * Math.max(daysBetween(installmentDate(r, k), until), 0) / 7);
 }
 
-// Cuántas cuotas completas cubre lo pagado
+// Cuántas cuotas completas cubre lo pagado (las adelantadas también cuentan)
 function installmentsCovered(r: Rental, paidRent: number, due: number): number {
   if (!(r.weekly_fee > 0)) return due;
-  const first = firstInstallment(r).amount;
-  if (paidRent < first) return 0;
-  return 1 + Math.floor((paidRent - first) / r.weekly_fee);
+  let covered = 0, acc = 0;
+  for (let amount = installmentAmount(r, 0); amount > 0 && acc + amount <= paidRent; amount = installmentAmount(r, covered)) {
+    acc += amount;
+    covered++;
+  }
+  return covered;
 }
 
 export function rentStatus(r: Rental, payments: RentalPayment[], today: string): RentStatus {
@@ -113,11 +120,14 @@ export function rentStatus(r: Rental, payments: RentalPayment[], today: string):
 
   const sum = (kind: RentalPayment['kind']) =>
     payments.filter(p => p.kind === kind).reduce((s, p) => s + p.amount, 0);
-  const paidRent    = sum('rent');
+  // Los días sin cobrar (D12, causa del dueño, taller) se descuentan como si los hubiera pagado
+  const paidRent    = sum('rent') + sum('credit');
   const depositPaid = sum('deposit');
 
   const weeksDue = installmentsDueUntil(r, asOf);
-  const owed     = totalDue(r, weeksDue) - paidRent;
+  let totalDue = 0;
+  for (let k = 0; k < weeksDue; k++) totalDue += installmentAmount(r, k);
+  const owed     = totalDue - paidRent;
   const covered  = installmentsCovered(r, paidRent, weeksDue);
   const due      = installmentDate(r, covered);
   const nextDue  = r.end_date && due >= r.end_date ? null : due;
@@ -162,7 +172,7 @@ export function rentalAlert(vehicle: Vehicle, st: RentStatus): VehicleAlert | nu
 // Lo cobrado (cuotas y mora) en un mes 'YYYY-MM'
 export function collectedInMonth(payments: RentalPayment[], yearMonth: string): number {
   return payments
-    .filter(p => p.kind !== 'deposit' && p.date.startsWith(yearMonth))
+    .filter(p => (p.kind === 'rent' || p.kind === 'fee') && p.date.startsWith(yearMonth))
     .reduce((s, p) => s + p.amount, 0);
 }
 

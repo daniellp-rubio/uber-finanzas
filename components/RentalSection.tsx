@@ -97,7 +97,9 @@ export default function RentalSection({ vehicle, rental, payments, isActive, onC
   const handleDeletePayment = (p: RentalPayment) =>
     Alert.alert('Eliminar pago', p.transaction_id !== null
       ? `¿Eliminar el pago de ${formatCurrency(p.amount)}? También se borra el ingreso 🔑 de ese día.`
-      : `¿Eliminar el abono de ${formatCurrency(p.amount)} al depósito?`, [
+      : p.kind === 'credit'
+        ? `¿Eliminar los días sin cobrar (${formatCurrency(p.amount)})? Vuelve a deberlos.`
+        : `¿Eliminar el abono de ${formatCurrency(p.amount)} al depósito?`, [
       { text: 'Cancelar', style: 'cancel' },
       { text: 'Eliminar', style: 'destructive', onPress: () => { deleteRentalPayment(p); onChanged(); } },
     ]);
@@ -168,7 +170,9 @@ export default function RentalSection({ vehicle, rental, payments, isActive, onC
                 <Text style={rs.payTitle}>{paymentLabel(p.kind)}</Text>
                 <Text style={rs.paySub}>{formatDate(p.date)}{p.note ? ` · ${p.note}` : ''}</Text>
               </View>
-              <Text style={[rs.payAmt, p.kind === 'deposit' && { color: '#aaa' }]}>+{formatCurrency(p.amount)}</Text>
+              <Text style={[rs.payAmt, (p.kind === 'deposit' || p.kind === 'credit') && { color: '#aaa' }]}>
+                {p.kind === 'credit' ? '' : '+'}{formatCurrency(p.amount)}
+              </Text>
             </TouchableOpacity>
           ))}
           <Text style={rs.hint}>Mantén presionado para eliminar</Text>
@@ -288,8 +292,7 @@ function RentalFormModal({ vehicle, rental, canDelete, onClose, onSaved }: {
             • Contrato firmado y pagaré{'\n'}
             • Fotos del carro por dentro y por fuera{'\n'}
             • GPS instalado{'\n'}
-            • Antecedentes del conductor y su perfil de Uber: 4,8 ★ o más y 1.000 viajes o más{'\n'}
-            • Pregunta por escrito a tu aseguradora si el seguro cubre el carro trabajando en Uber
+            • Antecedentes del conductor y su perfil de Uber: 4,8 ★ o más y 1.000 viajes o más
           </Text>
         </View>
       )}
@@ -366,19 +369,25 @@ function PaymentModal({ vehicle, rental, payments, onClose, onSaved }: {
   const suggested = (k: RentalPayment['kind']): number => {
     if (k === 'rent')    return st.owed > 0 ? st.owed : rental.weekly_fee;
     if (k === 'fee')     return st.lateFee + (km?.charge ?? 0);
-    return Math.max(rental.deposit - st.depositPaid, 0);
+    if (k === 'deposit') return Math.max(rental.deposit - st.depositPaid, 0);
+    return 0;
   };
 
   const [kind, setKind]     = useState<RentalPayment['kind']>('rent');
   const [amount, setAmount] = useState(String(suggested('rent') || ''));
+  const [days, setDays]     = useState('1');
   const [date, setDate]     = useState<string | null>(today);
   const [note, setNote]     = useState('');
+
+  // Días sin cobrar: la séptima parte de la cuota por cada día (cláusulas 11h, 15 y 17c del contrato)
+  const creditAmount = Math.round(rental.weekly_fee * (Number(days) || 0) / 7);
+  const value = kind === 'credit' ? creditAmount : Number(amount);
 
   const pick = (k: RentalPayment['kind']) => { setKind(k); setAmount(String(suggested(k) || '')); };
 
   const handleSave = () => {
-    if (!(Number(amount) > 0)) {
-      Alert.alert('Falta el valor', 'Escribe cuánto te pagó.');
+    if (!(value > 0)) {
+      Alert.alert('Falta el valor', kind === 'credit' ? 'Escribe cuántos días no se cobran.' : 'Escribe cuánto te pagó.');
       return;
     }
     if (!date) {
@@ -389,7 +398,8 @@ function PaymentModal({ vehicle, rental, payments, onClose, onSaved }: {
       Alert.alert('Revisa la fecha', 'La fecha no puede ser después de hoy.');
       return;
     }
-    addRentalPayment(rental, vehicle.name, kind, Number(amount), date, note.trim() || null);
+    const daysNote = kind === 'credit' ? `${Number(days)} ${Number(days) === 1 ? 'día' : 'días'}` : null;
+    addRentalPayment(rental, vehicle.name, kind, value, date, [daysNote, note.trim()].filter(Boolean).join(' · ') || null);
     onSaved();
   };
 
@@ -406,21 +416,34 @@ function PaymentModal({ vehicle, rental, payments, onClose, onSaved }: {
         ))}
       </View>
 
-      <Text style={ms.mLabel}>¿CUÁNTO?</Text>
-      <TextInput style={ms.mBigInput} value={showNum(amount)} onChangeText={t => setAmount(digits(t))} keyboardType="number-pad" placeholder="$ 0" placeholderTextColor="#444" />
+      {kind === 'credit' ? (
+        <>
+          <Text style={ms.mLabel}>¿CUÁNTOS DÍAS NO SE COBRAN?</Text>
+          <View style={ms.mRow}>
+            <TextInput style={ms.mSmallInput} value={days} onChangeText={t => setDays(digits(t))} keyboardType="number-pad" placeholder="0" placeholderTextColor="#444" />
+            <Text style={rs.rowLabel}>días = {formatCurrency(creditAmount)}</Text>
+          </View>
+        </>
+      ) : (
+        <>
+          <Text style={ms.mLabel}>¿CUÁNTO?</Text>
+          <TextInput style={ms.mBigInput} value={showNum(amount)} onChangeText={t => setAmount(digits(t))} keyboardType="number-pad" placeholder="$ 0" placeholderTextColor="#444" />
+        </>
+      )}
       <Text style={ms.mHint}>
         {kind === 'rent' && (st.owed > 0
           ? `Debe ${formatCurrency(st.owed)} de cuotas. Se anota como ingreso 🔑 en Hoy, con la fecha del pago.`
           : `Está al día: este pago adelanta la próxima semana. Se anota como ingreso 🔑 en Hoy.`)}
         {kind === 'fee' && `Mora hoy: ${formatCurrency(st.lateFee)}${km ? ` · km de más: ${formatCurrency(km.charge)}` : ''}. Se anota como ingreso 🔑 en Hoy.`}
         {kind === 'deposit' && 'El depósito no es un ingreso: se le devuelve cuando entregue el carro, menos multas y daños. No sale en Hoy.'}
+        {kind === 'credit' && 'Días que el contrato no cobra: carro inmovilizado por D12 o por documentos del carro, o más de 24 horas en el taller por mantenimiento o por un choque que no fue culpa suya. Se descuentan de lo que debe. No es ingreso ni sale en Hoy.'}
       </Text>
 
-      <Text style={ms.mLabel}>FECHA DEL PAGO</Text>
+      <Text style={ms.mLabel}>{kind === 'credit' ? 'FECHA' : 'FECHA DEL PAGO'}</Text>
       <DateField value={date} onChange={setDate} />
 
       <Text style={ms.mLabel}>NOTA (opcional)</Text>
-      <TextInput style={rs.noteInput} value={note} onChangeText={setNote} placeholder="Ej: pagó por Nequi" placeholderTextColor="#444" multiline />
+      <TextInput style={rs.noteInput} value={note} onChangeText={setNote} placeholder={kind === 'credit' ? 'Ej: inmovilizado por D12' : 'Ej: pagó por Nequi'} placeholderTextColor="#444" multiline />
     </SheetFrame>
   );
 }
@@ -434,12 +457,15 @@ function EndRentalModal({ vehicle, rental, payments, onClose, onSaved }: {
   const [date, setDate]     = useState<string | null>(today);
   const [endKm, setEndKm]   = useState('');
   const [back, setBack]     = useState(String(rentStatus(rental, payments, today).depositPaid || ''));
+  const [refund, setRefund] = useState<boolean | null>(null);  // ¿le devuelve los días pagados y no usados?
 
-  // Cómo queda la cuenta si lo devuelve en la fecha escrita
+  // Cómo queda la cuenta si lo devuelve en la fecha escrita (la última cuota cuenta solo los días que lo tuvo)
   const st = rentStatus({ ...rental, end_date: date ?? today }, payments, today);
   const km = endKm && date ? kmStatus(rental, { odometer_km: Number(endKm), odometer_date: date }) : null;
   const returned = Number(back) || 0;
   const kept     = st.depositPaid - returned;
+  const unused   = Math.max(-st.owed, 0);
+  const unusedRefund = unused > 0 && refund ? unused : 0;
 
   const handleSave = () => {
     if (!date) {
@@ -454,10 +480,14 @@ function EndRentalModal({ vehicle, rental, payments, onClose, onSaved }: {
       Alert.alert('Revisa el depósito', `Solo te pagó ${formatCurrency(st.depositPaid)} de depósito.`);
       return;
     }
+    if (unused > 0 && refund === null) {
+      Alert.alert('Días no usados', `Pagó ${formatCurrency(unused)} por días que no usó. Escoge si se los devuelves.`);
+      return;
+    }
     Alert.alert('Terminar arriendo', `¿${rental.driver_name} te devolvió el ${vehicle.name}?${st.owed > 0 ? ` Todavía debe ${formatCurrency(st.owed)} de cuotas.` : ''}`, [
       { text: 'Cancelar', style: 'cancel' },
       { text: 'Sí, terminar', style: 'destructive', onPress: () => {
-        endRental(rental, vehicle.name, date, Number(endKm) > 0 ? Number(endKm) : null, st.depositPaid, returned);
+        endRental(rental, vehicle.name, date, Number(endKm) > 0 ? Number(endKm) : null, st.depositPaid, returned, unusedRefund);
         onSaved();
       }},
     ]);
@@ -476,17 +506,37 @@ function EndRentalModal({ vehicle, rental, payments, onClose, onSaved }: {
       <View style={rs.tipBox}>
         <Text style={rs.tipTitle}>Cómo queda la cuenta</Text>
         <Text style={rs.tipTxt}>
-          {st.owed > 0 ? `• Debe ${formatCurrency(st.owed)} de cuotas` : '• Cuotas al día'}{'\n'}
+          {st.owed > 0 ? `• Debe ${formatCurrency(st.owed)} de cuotas` : unused > 0 ? `• Pagó ${formatCurrency(unused)} por días que no usó` : '• Cuotas al día'}{'\n'}
           {km ? (km.excess > 0 ? `• Se pasó ${formatKm(km.excess)} km = ${formatCurrency(km.charge)}` : '• No se pasó de los km') + '\n' : ''}
           • Te pagó {formatCurrency(st.depositPaid)} de depósito
         </Text>
       </View>
+
+      {unused > 0 && (
+        <>
+          <Text style={ms.mLabel}>¿LE DEVUELVES LOS DÍAS QUE NO USÓ?</Text>
+          <View style={ms.mGrid}>
+            <TouchableOpacity style={[ms.mChip, refund === true && ms.mChipOn]} onPress={() => setRefund(true)}>
+              <Text style={[ms.mChipTxt, refund === true && ms.mChipTxtOn]}>Sí, {formatCurrency(unused)}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={[ms.mChip, refund === false && ms.mChipOn]} onPress={() => setRefund(false)}>
+              <Text style={[ms.mChipTxt, refund === false && ms.mChipTxtOn]}>No</Text>
+            </TouchableOpacity>
+          </View>
+          <Text style={ms.mHint}>
+            Según el contrato (cláusula 20f) se devuelven si terminó en la prueba, con aviso de 15 días, o porque tú
+            fallaste. No se devuelven si lo terminaste tú porque él incumplió o si lo devolvió sin aviso: ese valor se
+            descuenta de lo que deba.{unusedRefund > 0 ? ` Se anota como gasto 📦 en Hoy.` : ''}
+          </Text>
+        </>
+      )}
 
       <Text style={ms.mLabel}>¿CUÁNTO DEL DEPÓSITO LE DEVUELVES?</Text>
       <TextInput style={ms.mInput} value={showNum(back)} onChangeText={t => setBack(digits(t))} keyboardType="number-pad" placeholder="$ 0" placeholderTextColor="#444" />
       <Text style={ms.mHint}>
         Antes de devolverlo revisa multas en el SIMIT (pueden llegar semanas después) y descuenta daños y lo que deba.
         {kept > 0 ? ` Te quedas con ${formatCurrency(kept)}: se anota como ingreso 🔑.` : ''}
+        {returned + unusedRefund > 0 ? ` En total le transfieres ${formatCurrency(returned + unusedRefund)}.` : ''}
       </Text>
     </SheetFrame>
   );
