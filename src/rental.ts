@@ -7,7 +7,7 @@ import { addDays, daysBetween, formatCurrency } from './format';
 // ─── Contrato de arriendo de la Duster (v2, 2026-09-28; ver references/arquitectura.md) ──
 
 export const RENTAL_DEFAULTS = {
-  weeklyFee:     550000,   // canon prepagado, cada 7 días desde el día de entrega
+  weeklyFee:     550000,   // canon prepagado cada 7 días desde el primer día de pago
   deposit:       1200000,  // se devuelve al terminar, menos multas y daños
   kmPerWeek:     1800,     // km incluidos por semana, acumulables
   extraKmPrice:  250,      // COP por km de más
@@ -36,16 +36,38 @@ export function paymentIcon(kind: string): string {
 
 const WEEKDAYS = ['domingos', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábados'];
 
-// "lunes": el día de la semana en que le toca pagar (el mismo del día de entrega)
-export function payDayName(startDate: string): string {
-  const [y, m, d] = startDate.split('-').map(Number);
-  return WEEKDAYS[new Date(y, m - 1, d).getDay()];
+// 0 = domingo … 6 = sábado
+export function weekdayOf(date: string): number {
+  const [y, m, d] = date.split('-').map(Number);
+  return new Date(y, m - 1, d).getDay();
+}
+
+// "martes": el día de la semana en que le toca pagar
+export function payDayName(payDate: string): string {
+  return WEEKDAYS[weekdayOf(payDate)];
+}
+
+// Primer día de pago con ese día de la semana, desde la entrega (la misma fecha si coincide)
+export function firstPayDateFor(startDate: string, weekday: number): string {
+  return addDays(startDate, (weekday - weekdayOf(startDate) + 7) % 7);
+}
+
+// Día de las cuotas semanales: el de la entrega, salvo que el contrato fije otro
+export function firstPayDate(r: Pick<Rental, 'start_date' | 'first_pay_date'>): string {
+  return r.first_pay_date && r.first_pay_date > r.start_date ? r.first_pay_date : r.start_date;
+}
+
+// Si el día de pago no es el de la entrega, la primera cuota (se paga al entregar) cubre solo
+// los días hasta el primer día de pago, a la séptima parte de la cuota por día
+export function firstInstallment(r: Pick<Rental, 'start_date' | 'first_pay_date' | 'weekly_fee'>): { days: number; amount: number } {
+  const days = daysBetween(r.start_date, firstPayDate(r));
+  return days > 0 ? { days, amount: Math.round(r.weekly_fee * days / 7) } : { days: 7, amount: r.weekly_fee };
 }
 
 // ─── Estado de los pagos ──────────────────────────────────────────────────────
 
 export interface RentStatus {
-  weeksDue:    number;          // cuotas que ya tocaba pagar (incluida la que vence hoy)
+  weeksDue:    number;          // cuotas que ya tocaba pagar (incluida la que vence hoy; la primera puede ser parcial)
   paidRent:    number;
   owed:        number;          // > 0 debe; <= 0 al día (negativo = pagó por adelantado)
   nextDue:     string | null;   // cuota más vieja sin pagar completa (null: terminó y quedó al día)
@@ -56,13 +78,36 @@ export interface RentStatus {
   level:       Level;
 }
 
-function weeksDueUntil(r: Rental, asOf: string): number {
+// Fecha de la cuota k (0 = la que se paga al entregar el carro)
+function installmentDate(r: Rental, k: number): string {
+  const pay = firstPayDate(r);
+  if (pay === r.start_date) return addDays(r.start_date, 7 * k);
+  return k === 0 ? r.start_date : addDays(pay, 7 * (k - 1));
+}
+
+function installmentsDueUntil(r: Rental, asOf: string): number {
   if (asOf < r.start_date) return 0;
-  return Math.floor(daysBetween(r.start_date, asOf) / 7) + 1;
+  const pay = firstPayDate(r);
+  if (asOf < pay) return 1;
+  return (pay === r.start_date ? 0 : 1) + Math.floor(daysBetween(pay, asOf) / 7) + 1;
+}
+
+// Lo que suman las primeras n cuotas
+function totalDue(r: Rental, n: number): number {
+  if (n <= 0) return 0;
+  return firstInstallment(r).amount + (n - 1) * r.weekly_fee;
+}
+
+// Cuántas cuotas completas cubre lo pagado
+function installmentsCovered(r: Rental, paidRent: number, due: number): number {
+  if (!(r.weekly_fee > 0)) return due;
+  const first = firstInstallment(r).amount;
+  if (paidRent < first) return 0;
+  return 1 + Math.floor((paidRent - first) / r.weekly_fee);
 }
 
 export function rentStatus(r: Rental, payments: RentalPayment[], today: string): RentStatus {
-  // Con el carro devuelto, solo cuentan las semanas que lo tuvo
+  // Con el carro devuelto, solo cuentan las cuotas de los días que lo tuvo
   const lastDay = r.end_date ? addDays(r.end_date, -1) : today;
   const asOf    = lastDay < today ? lastDay : today;
 
@@ -71,10 +116,10 @@ export function rentStatus(r: Rental, payments: RentalPayment[], today: string):
   const paidRent    = sum('rent');
   const depositPaid = sum('deposit');
 
-  const weeksDue = weeksDueUntil(r, asOf);
-  const owed     = weeksDue * r.weekly_fee - paidRent;
-  const covered  = r.weekly_fee > 0 ? Math.floor(paidRent / r.weekly_fee) : weeksDue;
-  const due      = addDays(r.start_date, 7 * covered);
+  const weeksDue = installmentsDueUntil(r, asOf);
+  const owed     = totalDue(r, weeksDue) - paidRent;
+  const covered  = installmentsCovered(r, paidRent, weeksDue);
+  const due      = installmentDate(r, covered);
   const nextDue  = r.end_date && due >= r.end_date ? null : due;
 
   if (owed <= 0 || nextDue === null) {
@@ -88,7 +133,7 @@ export function rentStatus(r: Rental, payments: RentalPayment[], today: string):
   const feeUntil = r.end_date && r.end_date < today ? r.end_date : today;
   let lateDays = 0;
   for (let k = covered; k < weeksDue; k++) {
-    const late = daysBetween(addDays(r.start_date, 7 * k), feeUntil) - GRACE_DAYS;
+    const late = daysBetween(installmentDate(r, k), feeUntil) - GRACE_DAYS;
     lateDays += Math.min(Math.max(late, 0), MAX_LATE_DAYS);
   }
 
