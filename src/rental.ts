@@ -58,8 +58,8 @@ export function firstPayDate(r: Pick<Rental, 'start_date' | 'first_pay_date'>): 
   return r.first_pay_date && r.first_pay_date > r.start_date ? r.first_pay_date : r.start_date;
 }
 
-// Si el día de pago no es el de la entrega, la primera cuota (se paga al entregar) cubre solo
-// los días hasta el primer día de pago, a la séptima parte de la cuota por día
+// Si el día de pago no es el de la entrega, la primera cuota cubre solo los días desde la entrega
+// hasta el primer día de pago, a la séptima parte de la cuota por día
 export function firstInstallment(r: Pick<Rental, 'start_date' | 'first_pay_date' | 'weekly_fee'>): { days: number; amount: number } {
   const days = daysBetween(r.start_date, firstPayDate(r));
   return days > 0 ? { days, amount: Math.round(r.weekly_fee * days / 7) } : { days: 7, amount: r.weekly_fee };
@@ -79,18 +79,26 @@ export interface RentStatus {
   level:       Level;
 }
 
-// Fecha de la cuota k (0 = la que se paga al entregar el carro)
+// Inicio del periodo que cubre la cuota k (0 = el que empieza el día de la entrega)
 function installmentDate(r: Rental, k: number): string {
   const pay = firstPayDate(r);
   if (pay === r.start_date) return addDays(r.start_date, 7 * k);
   return k === 0 ? r.start_date : addDays(pay, 7 * (k - 1));
 }
 
-function installmentsDueUntil(r: Rental, asOf: string): number {
-  if (asOf < r.start_date) return 0;
-  const pay = firstPayDate(r);
-  if (asOf < pay) return 1;
-  return (pay === r.start_date ? 0 : 1) + Math.floor(daysBetween(pay, asOf) / 7) + 1;
+// Día en que se paga la cuota k: al empezar su periodo (por adelantado) o al terminarlo (semana
+// vencida; con el carro devuelto antes, el día de la devolución)
+function dueDate(r: Rental, k: number): string {
+  if (!r.in_arrears) return installmentDate(r, k);
+  const next = installmentDate(r, k + 1);
+  return r.end_date && r.end_date < next ? r.end_date : next;
+}
+
+// Cuotas que ya tocaba pagar a hoy: su periodo empezó mientras tenía el carro y ya llegó su día de pago
+function installmentsDueUntil(r: Rental, asOf: string, today: string): number {
+  let n = 0;
+  while (installmentDate(r, n) <= asOf && dueDate(r, n) <= today) n++;
+  return n;
 }
 
 // Valor de la cuota k: cuota × días que cubre / 7. La primera puede ser parcial (día de pago
@@ -124,13 +132,12 @@ export function rentStatus(r: Rental, payments: RentalPayment[], today: string):
   const paidRent    = sum('rent') + sum('credit');
   const depositPaid = sum('deposit');
 
-  const weeksDue = installmentsDueUntil(r, asOf);
+  const weeksDue = installmentsDueUntil(r, asOf, today);
   let totalDue = 0;
   for (let k = 0; k < weeksDue; k++) totalDue += installmentAmount(r, k);
   const owed     = totalDue - paidRent;
   const covered  = installmentsCovered(r, paidRent, weeksDue);
-  const due      = installmentDate(r, covered);
-  const nextDue  = r.end_date && due >= r.end_date ? null : due;
+  const nextDue  = r.end_date && installmentDate(r, covered) >= r.end_date ? null : dueDate(r, covered);
 
   if (owed <= 0 || nextDue === null) {
     return { weeksDue, paidRent, owed, nextDue, daysLate: 0, lateFee: 0, canRecover: false, depositPaid, level: 'ok' };
@@ -143,7 +150,7 @@ export function rentStatus(r: Rental, payments: RentalPayment[], today: string):
   const feeUntil = r.end_date && r.end_date < today ? r.end_date : today;
   let lateDays = 0;
   for (let k = covered; k < weeksDue; k++) {
-    const late = daysBetween(installmentDate(r, k), feeUntil) - GRACE_DAYS;
+    const late = daysBetween(dueDate(r, k), feeUntil) - GRACE_DAYS;
     lateDays += Math.min(Math.max(late, 0), MAX_LATE_DAYS);
   }
 
@@ -154,6 +161,18 @@ export function rentStatus(r: Rental, payments: RentalPayment[], today: string):
     depositPaid,
     level:      daysLate > GRACE_DAYS ? 'red' : 'yellow',
   };
+}
+
+// Las próximas cuotas sin pagar completas, con su día de pago y su valor (para los avisos)
+export function upcomingInstallments(r: Rental, payments: RentalPayment[], count: number): { date: string; amount: number }[] {
+  if (!(r.weekly_fee > 0)) return [];
+  const paid = payments.filter(p => p.kind === 'rent' || p.kind === 'credit').reduce((s, p) => s + p.amount, 0);
+  const list: { date: string; amount: number }[] = [];
+  for (let k = installmentsCovered(r, paid, 0); list.length < count; k++) {
+    if (r.end_date && installmentDate(r, k) >= r.end_date) break;
+    list.push({ date: dueDate(r, k), amount: installmentAmount(r, k) });
+  }
+  return list;
 }
 
 // "Debe $550.000 · 2 días de atraso", "Hoy paga $550.000", "Al día"
