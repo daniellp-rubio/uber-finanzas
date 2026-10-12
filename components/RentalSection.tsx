@@ -362,7 +362,7 @@ function RentalFormModal({ vehicle, rental, canDelete, onClose, onSaved }: {
 
       <Text style={ms.mLabel}>MORA POR DÍA DE ATRASO</Text>
       <TextInput style={ms.mInput} value={showNum(lateFee)} onChangeText={t => setLateFee(digits(t))} keyboardType="number-pad" placeholder="$ 0" placeholderTextColor="#444" />
-      <Text style={ms.mHint}>Se cobra después de la gracia, máximo {MAX_LATE_DAYS} días por cada cuota. Al día {RECOVER_DAY} de atraso el contrato debe permitir recoger el carro.</Text>
+      <Text style={ms.mHint}>Déjalo en $0 si el contrato no cobra mora. Si la cobra, se suma después de la gracia, máximo {MAX_LATE_DAYS} días por cada cuota. Desde el día {RECOVER_DAY} de atraso el contrato permite recoger el carro.</Text>
 
       <Text style={ms.mLabel}>DEPÓSITO</Text>
       <TextInput style={ms.mInput} value={showNum(deposit)} onChangeText={t => setDeposit(digits(t))} keyboardType="number-pad" placeholder="$ 0" placeholderTextColor="#444" />

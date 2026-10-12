@@ -7,16 +7,16 @@ import { addDays, daysBetween, formatCurrency } from './format';
 // ─── Contrato de arriendo de la Duster (v4, 2026-10-11; ver references/arquitectura.md) ──
 
 export const RENTAL_DEFAULTS = {
-  weeklyFee:     550000,   // canon prepagado cada 7 días desde el primer día de pago
+  weeklyFee:     550000,   // canon cada 7 días desde el primer día de pago
   deposit:       550000,   // de contado al entregar; se devuelve al terminar, menos multas y daños
   kmPerWeek:     1800,     // km incluidos por semana, acumulables
   extraKmPrice:  250,      // COP por km de más
-  lateFeePerDay: 30000,    // pena por día de retraso, después de la gracia
+  lateFeePerDay: 0,        // el contrato de la Duster no cobra mora; el campo queda para otros contratos
 };
 
-export const GRACE_DAYS      = 1;        // 24 h para pagar sin pena
-export const MAX_LATE_DAYS   = 7;        // la pena se cobra máximo 7 días por cada cuota
-export const RECOVER_DAY     = 3;        // al día 3 de atraso el contrato permite recoger el carro
+export const GRACE_DAYS      = 1;        // 24 h para pagar sin que cuente como retraso
+export const MAX_LATE_DAYS   = 7;        // si un contrato cobra pena por día, máximo 7 días por cada cuota
+export const RECOVER_DAY     = 8;        // con más de una semana de atraso el contrato permite recoger el carro
 export const WEEKS_PER_MONTH = 52 / 12;  // 4,33
 export const WORK_DAYS_MONTH = 24;       // igual que el objetivo diario de Balance
 
