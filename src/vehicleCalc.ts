@@ -12,7 +12,6 @@ export const DEFAULTS = {
   uberCommissionPct: 25,      // comision uber colombia (solo sin Uber Pass)
   uberPassActive:    true,    // Uber cobra suscripcion (Uber Pass) en vez de comision
   uberPassPriceCOP:  90000,   // valor de cada cobro de Uber Pass
-  uberPassPerWeek:   2,       // cobros de Uber Pass por semana
 };
 
 // ─── Settings helpers ─────────────────────────────────────────────────────────
@@ -20,7 +19,6 @@ export const DEFAULTS = {
 export interface VehicleConfig {
   vehicleName:          string;
   energy:               EnergyType;
-  energyCostPerKm:      number;   // gasolina o carga eléctrica por km
   picoPlacaDaysPerWeek: number;
   maintenanceCostPerKm: number;
   uberCommissionPct:    number;
@@ -35,7 +33,6 @@ export function getVehicleConfig(): VehicleConfig {
   return {
     vehicleName:          v?.name ?? 'Mi carro',
     energy:               v?.energy ?? 'gasoline',
-    energyCostPerKm:      v ? vehicleEnergyCostPerKm(v) : g.gasPrice / g.kmPerGallon,
     picoPlacaDaysPerWeek: v?.pico_placa_days ?? g.picoPlacaDays,
     maintenanceCostPerKm: v?.maint_cost_per_km ?? g.maintCostPerKm,
     uberCommissionPct:    Number(getSetting('uber_commission_pct',    String(DEFAULTS.uberCommissionPct))),
@@ -72,42 +69,6 @@ export function saveUberConfig(cfg: Partial<UberConfig>): void {
   if (cfg.uberPassPriceCOP     !== undefined) setSetting('uber_pass_price_cop',     String(cfg.uberPassPriceCOP));
 }
 
-// ─── Cálculo ganancia real ────────────────────────────────────────────────────
-
-export interface RealEarnings {
-  grossIncome:       number;  // lo que muestra Uber (bruto)
-  uberCommission:    number;  // comisión Uber (0 con Uber Pass)
-  uberPassDaily:     number;  // Uber Pass repartido por día trabajado (0 sin Uber Pass)
-  energyCost:        number;  // gasolina o carga eléctrica
-  maintenanceCost:   number;  // provisión mantenimiento
-  netReal:           number;  // lo que queda de verdad
-  costPerKm:         number;  // costo total por km
-}
-
-export function calcRealEarnings(
-  grossIncome: number,
-  kmDriven: number,
-  cfg: VehicleConfig
-): RealEarnings {
-  const uberCommission  = cfg.uberPassActive ? 0 : grossIncome * (cfg.uberCommissionPct / 100);
-  const uberPassDaily   = cfg.uberPassActive ? calcUberPassPerWorkDay(cfg) : 0;
-  const energyCost      = kmDriven * cfg.energyCostPerKm;
-  const maintenanceCost = kmDriven * cfg.maintenanceCostPerKm;
-  const netReal         = grossIncome - uberCommission - uberPassDaily - energyCost - maintenanceCost;
-  const totalCost       = uberCommission + uberPassDaily + energyCost + maintenanceCost;
-  const costPerKm       = kmDriven > 0 ? totalCost / kmDriven : 0;
-
-  return {
-    grossIncome,
-    uberCommission:  Math.round(uberCommission),
-    uberPassDaily,
-    energyCost:      Math.round(energyCost),
-    maintenanceCost: Math.round(maintenanceCost),
-    netReal:         Math.round(netReal),
-    costPerKm:       Math.round(costPerKm),
-  };
-}
-
 // ─── Avisos de todos los carros (arriendo, vencimientos y mantenimientos) ────
 
 // Avisos de un carro, incluido el pago del arriendo si está arrendado
@@ -124,14 +85,6 @@ export function getFleetAlerts(): VehicleAlert[] {
   return getVehicles()
     .flatMap(v => getVehicleAlerts(v, today))
     .sort((a, b) => (a.level === b.level ? 0 : a.level === 'red' ? -1 : 1));
-}
-
-// ─── Uber Pass ────────────────────────────────────────────────────────────────
-
-// Costo semanal del Uber Pass repartido entre los días que se trabaja (7 menos pico y placa)
-export function calcUberPassPerWorkDay(cfg: VehicleConfig): number {
-  const workDays = Math.max(7 - cfg.picoPlacaDaysPerWeek, 1);
-  return Math.round((cfg.uberPassPriceCOP * DEFAULTS.uberPassPerWeek) / workDays);
 }
 
 // ─── Comisión en efectivo ─────────────────────────────────────────────────────
