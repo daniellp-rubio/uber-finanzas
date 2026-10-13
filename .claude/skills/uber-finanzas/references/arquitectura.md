@@ -1,6 +1,6 @@
 # Arquitectura de Uber Finanzas
 
-Estado escaneado el 2026-09-22; actualizado el 2026-09-23 (cargas, horas, meta, copia de seguridad, PDF, DIAN 2026). Si cambias la estructura, actualiza este archivo en el mismo PR.
+Estado escaneado el 2026-09-22; actualizado el 2026-09-23 (cargas, horas, meta, copia de seguridad, PDF, DIAN 2026) y el 2026-10-13 (rediseño Material 3 oscuro, "Me queda" con el mecánico). Si cambias la estructura, actualiza este archivo en el mismo PR.
 
 ## Stack
 
@@ -12,6 +12,7 @@ Estado escaneado el 2026-09-22; actualizado el 2026-09-23 (cargas, horas, meta, 
 | Persistencia | `expo-sqlite ~16` | API **síncrona** (`getAllSync`, `runSync`) |
 | Notificaciones | `expo-notifications ~0.32` | Solo locales, sin push |
 | Archivos | `expo-file-system ~19` (API nueva `File`/`Paths`), `expo-sharing`, `expo-document-picker`, `expo-print` | Copia de seguridad y PDF. Nativos: entraron en el build 3 |
+| Íconos | `@expo/vector-icons ~15.1` (MaterialCommunityIcons) + `expo-font ~14.0` | JS; `expo-font` ya venía autolinkeado por `expo` (la huella no cambió), se declara directo porque lo pide expo-doctor |
 | Navegación | ninguna librería | Tabs a mano en `App.tsx` |
 | `.npmrc` | `legacy-peer-deps=true` | CI y local deben respetarlo (`npm ci` lo lee) |
 
@@ -21,14 +22,16 @@ Dependencias instaladas y **sin usar**: `zustand`, `expo-status-bar`. No las use
 
 ```
 index.ts                 registerRootComponent(App)
-App.tsx                  Arranque (update OTA → initDatabase + setupNotifications → avisos de carros y de copia), tab bar, modal de transacción
+App.tsx                  Arranque (update OTA → initDatabase + setupNotifications → avisos de carros y de copia), barra de navegación Material, modal de transacción;
+                         un aviso de Hoy abre ese carro en Carros (openVehicleId)
 components/
-  TodayScreen.tsx        Tab "Hoy": jornada (recordatorios + hora de inicio/fin), avisos de carros, meta del día, resumen del día,
-                         calculadora ganancia real con "separa $X para el mecánico" (→ fondo Mecánico), lista del día
+  TodayScreen.tsx        Tab "Hoy": "Me queda hoy" (ingresos − gastos − lo del mecánico), aviso de carros (una línea → ese carro), meta del día,
+                         jornada (recordatorios + hora de inicio/fin), movimientos del día con papelera; hoja "Para el mecánico" / "Resumen del día"
+                         (km opcionales, "separar $X para el mecánico" → fondo Mecánico)
   HistoryScreen.tsx      Tab "Historial": semana / mes, totales, mejor día, resumen por WhatsApp (Share), ganancia por hora
                          (día vs noche, por día de la semana), detalle por día
-  BalanceScreen.tsx      Tab "Balance": estado del mes (verde/amarillo/rojo), gastos fijos, deudas, pico y placa, DianSection,
-                         MyDataSection, config Uber (Pass / comisión)
+  BalanceScreen.tsx      Tab "Balance": estado del mes y "Meta de hoy" (la misma de Hoy), gastos fijos, deudas (tocar → "Ya pagué <mes>" o borrar),
+                         pico y placa, DianSection, MyDataSection, config Uber (Pass / comisión)
   DianSection.tsx        Renta del año (DIAN 2026) proyectada con lo anotado
   MyDataSection.tsx      Copia de seguridad (guardar / recuperar) y resumen de ingresos en PDF (IncomePdfModal)
   FundsScreen.tsx        Tab "Fondos": sobres virtuales (incluye FundActionModal y FundDetailModal internos)
@@ -37,7 +40,8 @@ components/
   RentalSection.tsx      Sección "Arriendo" del detalle: estado de pagos, depósito, km, pagos.
                          Internos: RentalFormModal (contrato), PaymentModal, EndRentalModal (devolución)
   VehicleEconomics.tsx   "¿Cuánto te deja al mes?" (arrendado) o "Lo que te cuesta tenerlo" (propio); CostsModal (crédito + GPS)
-  SheetFrame.tsx         Marco de los modales pequeños + estilos compartidos `ms` (Carros y arriendo)
+  SheetFrame.tsx         Marco de los formularios (cerrar, título, botón grande) + estilos compartidos `ms` + MoneyField y ChoiceTile
+  ui.tsx                 Piezas comunes: Icon, Section, Row, Amount, Button, Chip, Banner, Pill, Collapsible, IconButton, SwitchMark, Hint
   VehicleFormModal.tsx   Alta/edición de carro (gasolina o eléctrico, con valores típicos por tipo)
   MaintenanceModal.tsx   Registro de mantenimiento; opcionalmente lo anota como gasto 🔧 Mecánico
   DateField.tsx          Fecha escrita DD/MM/AAAA con eco en palabras (sin selector nativo)
@@ -49,7 +53,9 @@ src/
   db.ts                  Singleton SQLite, esquema, todas las queries
   categories.ts          Categorías de ingreso/gasto + helpers label/icon; RENT_CATEGORY ('rent', ingreso que crea el arriendo, oculto en el selector);
                          CHARGE_CATEGORY ('charge', gasto ⚡ Carga)
-  financeCalc.ts         computeBalance(): objetivo diario y semáforo del mes; calcDailyGoal(): meta del día en Hoy
+  theme.ts               Tokens del tema: colores C, tipografía T, espacios S, radios R, TOUCH (48 dp)
+  financeCalc.ts         computeBalance(): objetivo diario y semáforo del mes; calcDailyGoal(): meta del día (Hoy y Balance);
+                         mechanicShare(): lo del mecánico para "Me queda"
   workStats.ts           Puro: jornadas → días de trabajo → ganancia por hora (total, día/noche, por día de la semana)
   summary.ts             Texto del resumen para WhatsApp
   dian.ts                Renta: UVT 2026, tabla art. 241, topes para declarar, proyección del año (projectYear)
@@ -60,7 +66,7 @@ src/
   fleet.ts               Constantes de flota (energía, valores típicos, tipos de mantenimiento, documentos) y cálculos puros
                          (próximo mantenimiento, vencimientos, avisos). No importa la DB: db.ts importa de aquí
   rental.ts              Arriendo, puro: valores del contrato, estado de pagos (saldo, mora, día de recoger), km incluidos, cuánto deja/cuesta
-  vehicleCalc.ts         Config = carro activo + Uber (app_settings), ganancia real, comisión efectivo, pico y placa,
+  vehicleCalc.ts         Config = carro activo + Uber (app_settings), comisión efectivo, pico y placa,
                          precio real del kWh (realKwhPrice / vehicleEnergyCostPerKm), getVehicleAlerts / getFleetAlerts (incluyen el aviso del arriendo)
   format.ts              Moneda COP, fechas locales YYYY-MM-DD, fecha y hora (nowString), mes en palabras, DD/MM/AAAA, sumar meses/días, km
   notifications.ts       Canal Android, permisos, jornada (8 recordatorios cada 2 h), avisos de carros y días de pago del arriendo (data.kind = 'vehicle'),
@@ -115,25 +121,26 @@ El celular del usuario ya tiene datos reales. Una migración mala = datos perdid
 - **Componentes**: `export default function XScreen()`. Estado local con `useState`; datos cargados con `const load = useCallback(() => {...}, [])` + `useEffect(() => { load(); }, [load])`. Tras escribir en la DB se llama `load()` otra vez. No hay store global.
 - **Refresco entre pantallas**: `App.tsx` pasa `refreshTrigger` (contador) a `TodayScreen`. Las otras tabs se desmontan al cambiar de tab y recargan al montar.
 - **DB**: funciones exportadas en `src/db.ts`, siempre síncronas y con parámetros `?` (nunca interpolar valores del usuario en SQL).
-- **Estilos**: `StyleSheet.create` al final del archivo en una constante `s` (subcomponentes usan `fs`, `fd`). Claves alineadas en columna.
-- **Modales**: `<Modal animationType="slide" presentationStyle="pageSheet" onRequestClose=...>`; dentro, `KeyboardAvoidingView` + `SafeAreaView` de `react-native-safe-area-context`; barra superior con "✕ Cancelar", título y spacer `width: 80`; botón de guardar grande abajo.
-- **Montos**: el input guarda solo dígitos (`t.replace(/\D/g, '')`) y muestra `Number(raw).toLocaleString('es-CO')`. Para pintar dinero usar siempre `formatCurrency` (redondea, separador `.`, sin signo; el signo se antepone a mano).
+- **Estilos**: `StyleSheet.create` al final del archivo en una constante `s` (subcomponentes usan `fs`, `fd`). Claves alineadas en columna. **Todo color, tamaño de letra, espacio y radio sale de `src/theme.ts`**; nada de hex sueltos.
+- **Piezas**: armar las pantallas con `components/ui.tsx` (Section, Row, Amount, Button, Chip, Collapsible…). Íconos de interfaz = Material (`Icon`); los emojis quedan solo como glifo de datos (categorías, mantenimientos, fondos).
+- **Modales**: `<Modal animationType="slide" presentationStyle="pageSheet" onRequestClose=...>`; dentro, `SheetFrame` (cerrar con ícono, título, botón grande abajo). Hojas cortas sobre la pantalla: `Modal transparent` + fondo oscuro + hoja con asa (ver TodayScreen).
+- **Montos**: el input guarda solo dígitos (`t.replace(/\D/g, '')`) y muestra `Number(raw).toLocaleString('es-CO')` (`MoneyField`). Para pintar dinero usar `Amount` o `formatCurrency` (redondea, separador `.`, sin signo; el signo se antepone a mano).
 - **Fechas**: strings locales `YYYY-MM-DD` (`todayString()`); nunca `toISOString()` (UTC corre el día en Colombia de noche). Para pedir una fecha usa `DateField` (no hay selector nativo; agregarlo obliga a APK). Helpers en `format.ts`: `parseDMY`, `addMonths`, `addDays`, `daysBetween`, `formatDate`, `formatKm`.
-- **Detalle dentro de un tab**: estado `selected` + `BackHandler` para el botón atrás de Android (ver `VehiclesScreen`). Así los modales del detalle no quedan anidados dentro de otro `Modal`.
-- **Confirmaciones**: toda acción destructiva pasa por `Alert.alert` con botón `style: 'destructive'`. Borrar = mantener presionado, siempre con texto de pista visible debajo.
-- **Textos**: español de Colombia, tuteo, frases cortas. Iconos = emojis.
+- **Detalle dentro de un tab**: estado `selected` + `BackHandler` para el botón atrás de Android (ver `VehiclesScreen`). Así los modales del detalle no quedan anidados dentro de otro `Modal`. Secciones largas en `Collapsible` con resumen de una línea.
+- **Confirmaciones**: toda acción destructiva pasa por `Alert.alert` con botón `style: 'destructive'`. Borrar = botón visible (`IconButton` papelera o botón de texto rojo), **nunca** mantener presionado.
+- **Textos**: español de Colombia, tuteo, frases cortas, títulos en tipo oración (sin MAYÚSCULAS espaciadas). Errores de formulario dicen qué falta y cómo arreglarlo.
 - **Comentarios**: separadores `// ─── Sección ───` y comentarios cortos en español.
 
-### Paleta (tema oscuro fijo, `userInterfaceStyle: dark`)
+### Paleta (Material 3 oscuro de alto contraste, `src/theme.ts`)
 
-| Uso | Color |
-|---|---|
-| Fondo | `#121212` |
-| Tarjetas | `#1a1a1a`, `#1e1e1e`; inputs `#262626` |
-| Verde (ingreso, OK, acción primaria) | `#00C853` · fondos `#0a2e1a`, `#0a3020`, `#0d3320` |
-| Rojo (gasto, peligro) | `#F44336` · fondos `#2e0a0a`, `#3d0a0a` |
-| Amarillo (aviso, neto) | `#FFC107` · fondos `#1a1a00`, `#2a1f00` |
-| Texto | `#fff` principal · `#aaa` / `#888` secundario · `#666` / `#555` / `#444` pistas |
+| Rol | Token | Uso |
+|---|---|---|
+| Fondo / superficies | `C.bg` `#0E0E0F`, `C.surface`, `C.surfaceHigh`, `C.surfaceHigher` | Pantalla, tarjetas, campos |
+| Texto | `C.text` (16:1), `C.textMuted`, `C.textFaint` (≥ 6:1, el más oscuro permitido) | Totales y cifras neutras en `C.text` |
+| Entra plata | `C.money` + `moneyContainer` | Ingresos, al día, cumplido |
+| Sale plata o se debe | `C.spend` + `spendContainer` | Gastos, deudas vencidas, borrar |
+| Aviso | `C.warn` + `warnContainer` | Por revisar, hoy paga, mecánico |
+| Acción neutra | `C.primary` + `primaryContainer` | Pestaña activa, selección, enlaces |
 
 ## Lógica de dominio
 
@@ -141,23 +148,21 @@ El celular del usuario ya tiene datos reales. Una migración mala = datos perdid
 - **Uber Pass** (desde 2026-09, lo usa el papá): Uber cobra una suscripción 2 veces por semana (~$90.000 cada una) en vez de comisión por viaje. El usuario registra cada cobro como gasto `uber_pass`. Interruptor "Tengo Uber Pass" en Balance → Configurar Uber.
 - **Carro activo** (`active_vehicle_id`): de él salen la energía por km, el pico y placa y el mantenimiento por km. Si fue quitado, se usa el primer carro.
 - **Energía por km** (`energyCostPerKm`): gasolina = precio galón / km por galón; eléctrico = kWh cada 100 km / 100 × precio kWh (BYD: 17,5 × $1.815 ≈ $318/km con electrolinera; el precio real de las cargas anotadas reemplaza al del carro).
-- **Ganancia real** (`calcRealEarnings`):
-  - Con Uber Pass: bruto − Uber Pass por día trabajado − energía (km × energía por km) − mantenimiento (km × COP/km).
-  - Uber Pass por día trabajado (`calcUberPassPerWorkDay`) = valor × 2 / (7 − días de pico y placa del carro activo). Duster en Medellín: 180.000 / 6 = 30.000; eléctrico sin pico y placa: 180.000 / 7 ≈ 25.714.
-  - Sin Uber Pass: la comisión Uber (%) reemplaza la línea de Uber Pass.
+- **Me queda (Hoy)** = ingresos del día − gastos del día − lo del mecánico (`mechanicShare`). Lo del mecánico sale solo de lo ganado manejando (sin el arriendo 🔑): con km del día escritos (setting `km_today` = "fecha|km") = km × mantenimiento por km del carro activo; sin km = `MECHANIC_PCT` (10 %) de lo ganado manejando (decisión de Dafel, 2026-10-13). Gasolina, carga y Uber Pass no se estiman: ya se anotan como gastos. "Separar" pasa la diferencia al fondo Mecánico (`maint_saved_today`).
+- **Deudas pagadas del mes**: "Ya pagué <mes>" llama `decrementDebtMonth` y guarda `debt_paid_<id>` = "YYYY-MM" en `app_settings`; con ese mes marcado ya no se ofrece (evita descontar dos veces). Sin cambio de esquema.
 - **Efectivo** (solo sin Uber Pass): al guardar un ingreso en efectivo se crea también un gasto `other` por la comisión Uber (`Comisión Uber en efectivo (X%)`). Con Uber Pass el interruptor de efectivo no se muestra.
 - **Pico y placa**: del carro activo. Días bloqueados = días/semana × (días del mes / 7); pérdida = días bloqueados × promedio diario. Con 0 días (eléctrico), Balance dice que el carro no tiene pico y placa. Duster en Medellín: 1 día (decisión de Dafel, 2026-09-22).
 - **Mantenimiento** (`fleet.ts`): cada `maintenance_plan` dice cada cuánto (km y/o meses; lo que pase primero). Próximo = último registro de ese tipo + intervalo. Amarillo a ≤ 30 días o ≤ 1.000 km; rojo si se pasó. Sin registro = "Registra el último que le hiciste" (sin aviso). Un carro nuevo trae plan: gasolina 10.000 km / 12 meses (Renault), eléctrico 12.000 km / 12 meses (plan del concesionario BYD-Motorysa, que manda para la garantía; el manual dice 20.000, se usa el menor). Mantenimiento por km típico: gasolina 80, eléctrico 150 (servicio + alineación + llantas; ver deuda #5).
 - **Kilometraje**: `odometer_km` se actualiza a mano (tab Carros) o al registrar un mantenimiento con más km. Si hay planes por km y el dato tiene más de 15 días, sale el aviso "actualiza el kilometraje".
 - **Vencimientos**: SOAT, técnico-mecánica, impuesto, seguro. Amarillo a ≤ 30 días, rojo vencido. `cost` es opcional (servirá para el costo anual en la fase de arriendo).
-- **Avisos**: `getFleetAlerts()` junta los de todos los carros (rojos primero); Hoy muestra los 2 primeros y lleva a Carros. Notificaciones (`refreshVehicleReminders`, al arrancar y tras cada cambio en Carros): vencimientos 15 días antes y el día anterior, mantenimientos por fecha 7 días antes, a las 9:00. Los mantenimientos por km solo avisan dentro de la app.
+- **Avisos**: `getFleetAlerts()` junta los de todos los carros (rojos primero); Hoy muestra el primero en una línea (más "Y N avisos más") y al tocarlo abre ese carro. En el detalle del carro, el estado del arriendo sale en su sección y no se repite como aviso. Notificaciones (`refreshVehicleReminders`, al arrancar y tras cada cambio en Carros): vencimientos 15 días antes y el día anterior, mantenimientos por fecha 7 días antes, a las 9:00. Los mantenimientos por km solo avisan dentro de la app.
 - **Arriendo** (`rental.ts`, valores por defecto = contrato de la Duster v4 del 2026-10-11: $550.000/semana vencida, depósito $550.000 de contado, 1.800 km/semana, $250 por km extra, sin mora por día (`lateFeePerDay` 0; el campo sigue para otros contratos) y recogida del carro con más de una semana de atraso (`RECOVER_DAY` 8)):
   - Cuota cada 7 días. Sin `first_pay_date`, el día de pago es el de la semana de la entrega. Con `first_pay_date` (chip "Día de pago" del formulario; p. ej. entrega jueves y pago los martes porque Uber paga el martes), la cuota 0 cubre solo los días desde la entrega hasta el primer día de pago, a cuota × días / 7 (5 días = $392.857); desde ahí, una cuota completa cada 7 días. Cada cuota cubre un periodo (`installmentDate` = inicio) y se paga en `dueDate`: al empezarlo si es **por adelantado** (`in_arrears` 0) o al terminarlo si es **semana vencida** (`in_arrears` 1, chip "¿Cuándo paga?", por defecto en contratos nuevos; con el carro devuelto antes, el día de la devolución). Cuotas debidas = las que empezaron mientras tenía el carro (hasta el día anterior a `end_date`) y cuyo `dueDate` ya llegó.
   - Es un **saldo**, no semanas marcadas: debe = suma de las cuotas debidas − pagos `rent` − `credit`. Aguanta abonos parciales y pagos adelantados. La cuota más vieja sin pagar completa sale de cuántas cuotas cubre lo pagado (la primera puede ser parcial). Cada cuota vale cuota × días que cubre / 7 (`installmentAmount`): con el carro devuelto antes de la siguiente cuota, la última cuenta solo los días que lo tuvo (contrato cl. 5b y 20f).
   - Atraso: día 0 = "hoy paga" (amarillo); día 1 = gracia de 24 h (amarillo, sin mora); desde el día 2, rojo. Mora (solo si el contrato tiene `late_fee_per_day` > 0) = Σ por cada cuota sin pagar completa de min(días de atraso de esa cuota − 1, 7) × mora diaria, contada hasta hoy o hasta `end_date` si ya devolvió el carro. Se muestra como sugerencia, no se suma sola. Desde el día `RECOVER_DAY` (8, más de una semana): "según el contrato ya puedes recoger el carro".
   - Tipos de pago: `rent` (cuota) y `fee` (mora, km extra, daños) crean un ingreso `rent` 🔑 con la fecha del pago; `deposit` no crea ingreso porque se devuelve; `credit` ("Días sin cobrar": D12, documentos del carro, taller más de 24 h, choque sin culpa; contrato cl. 11h, 15 y 17c) vale días × cuota / 7, descuenta la deuda y no crea ingreso. En la devolución, lo que no se devuelve del depósito entra como `fee` + ingreso; si pagó días que no usó, la app pregunta si se los devuelve (cl. 20f) y, si sí, los anota como gasto `other` 📦 del día (un ingreso negativo se vería con "+" en Hoy). Con rollback de OTA, el JS viejo ignora `credit` en la deuda y lo cuenta como cobrado.
   - Si el ingreso de un pago se borra desde Hoy, el pago deja de contar (`getRentalPayments` hace JOIN con `transactions`). Es la solución al huérfano de la deuda #2 para el arriendo.
-  - El ingreso `rent` no cuenta como día trabajado (`getMonthStats`), no entra a la ganancia real de Hoy ni al "mejor día" de Historial (`DailySummary.rent`). Sí suma al neto del mes (cubre la cuota del crédito que está en Deudas).
+  - El ingreso `rent` no cuenta como día trabajado (`getMonthStats`), no entra a lo del mecánico en Hoy ni al "mejor día" de Historial (`DailySummary.rent`). Sí suma al neto del mes (cubre la cuota del crédito que está en Deudas).
   - Km: se compara el último kilometraje anotado con `start_km` + `km_per_week` × días / 7, en total desde la entrega (no semana a semana).
   - Un carro arrendado no puede ser el activo ni quitarse; el activo no se puede arrendar.
   - Aviso en Hoy/Carros (`rentalAlert`) y notificación a las 9:00 en el día de pago de cada una de las próximas 4 cuotas sin pagar, con su monto (`upcomingInstallments`).

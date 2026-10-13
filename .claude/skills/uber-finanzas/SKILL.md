@@ -7,7 +7,7 @@ description: >-
   funcionalidad → aprobación → PR → merge → release (update OTA o APK en GitHub Releases).
   Cárgala SIEMPRE que la sesión toque este repo, aunque la tarea parezca pequeña: nueva
   funcionalidad, bug, cambio de textos o UI, pantallas Hoy/Historial/Balance/Fondos, base de
-  datos, notificaciones o jornada, cálculos (balance, ganancia real, pico y placa, DIAN, fondos,
+  datos, notificaciones o jornada, cálculos (balance, "me queda" y mecánico, pico y placa, DIAN, fondos,
   deudas), dependencias, app.json/eas.json, build, APK, EAS, OTA, release, PR, merge, "súbelo",
   "publícalo", "que le llegue a mi papá", "¿qué versión tiene?".
 ---
@@ -87,9 +87,11 @@ Mientras el paso de configuración inicial no esté completo (tabla en `referenc
 | Alta de carro / mantenimiento, campo de fecha | `components/VehicleFormModal.tsx`, `MaintenanceModal.tsx`, `DateField.tsx` |
 | Tablas, queries y migraciones | `src/db.ts` |
 | Categorías | `src/categories.ts` (gastos fijos: `AddFixedExpenseModal.tsx` + `CAT_ICONS` en `BalanceScreen.tsx`) |
-| Semáforo del mes, meta del día | `src/financeCalc.ts` |
+| Semáforo del mes | `src/financeCalc.ts` (`computeBalance`) |
 | Tipos de mantenimiento y documentos, intervalos, vencimientos, avisos | `src/fleet.ts` |
-| Config del carro activo, ganancia real, pico y placa, precio real del kWh | `src/vehicleCalc.ts` |
+| Config del carro activo, pico y placa, precio real del kWh | `src/vehicleCalc.ts` |
+| "Me queda" y lo del mecánico, meta del día | `src/financeCalc.ts` (`mechanicShare`, `calcDailyGoal`) |
+| Tema y piezas de interfaz | `src/theme.ts`, `components/ui.tsx`, `components/SheetFrame.tsx` |
 | Renta (DIAN) | `src/dian.ts`, `components/DianSection.tsx` |
 | Copia de seguridad, resumen de ingresos en PDF | `src/backupData.ts` (sin nativos), `src/backup.ts`, `src/incomeReport.ts`, `src/pdf.ts`, `components/MyDataSection.tsx` |
 | Horas trabajadas, $/hora, resumen por WhatsApp | `src/workStats.ts`, `src/summary.ts`, `components/HistoryScreen.tsx` |

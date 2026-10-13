@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { View, Text, StyleSheet, TextInput } from 'react-native';
 import { maskDMY, parseDMY, toDMY, formatLongDate } from '../src/format';
+import { C, T, S, R } from '../src/theme';
 
 // Fecha escrita como DD/MM/AAAA (sin selector nativo: no obliga a sacar APK).
 // Debajo repite la fecha en palabras para que se vea si quedó bien escrita.
@@ -28,10 +29,11 @@ export default function DateField({ value, onChange }: Props) {
         onChangeText={handleChange}
         keyboardType="number-pad"
         placeholder="DD/MM/AAAA"
-        placeholderTextColor="#444"
+        placeholderTextColor={C.textFaint}
         maxLength={10}
+        accessibilityLabel="Fecha, día mes y año"
       />
-      <Text style={[s.echo, !parsed && text.length === 10 && s.echoBad]}>
+      <Text style={[s.echo, !parsed && text.length === 10 && { color: C.spend }]}>
         {parsed
           ? formatLongDate(parsed)
           : text.length === 10 ? 'Esa fecha no existe' : 'Ejemplo: 15/09/2027'}
@@ -41,8 +43,7 @@ export default function DateField({ value, onChange }: Props) {
 }
 
 const s = StyleSheet.create({
-  wrap:     { marginBottom: 20 },
-  input:    { backgroundColor: '#1e1e1e', borderRadius: 14, padding: 16, color: '#fff', fontSize: 22, fontWeight: '700', letterSpacing: 1 },
-  echo:     { color: '#888', fontSize: 13, marginTop: 6, marginLeft: 4, textTransform: 'capitalize' },
-  echoBad:  { color: '#F44336', textTransform: 'none' },
+  wrap:  { marginBottom: S.xl },
+  input: { ...T.title, fontVariant: ['tabular-nums'], letterSpacing: 1, backgroundColor: C.surfaceHigh, borderRadius: R.md, paddingHorizontal: S.lg, minHeight: 56 },
+  echo:  { ...T.labelSm, marginTop: S.xs, marginLeft: S.xs },
 });

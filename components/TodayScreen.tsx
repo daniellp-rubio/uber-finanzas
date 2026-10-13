@@ -1,43 +1,56 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
-  View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  Alert, RefreshControl, ActivityIndicator, TextInput,
+  View, Text, StyleSheet, ScrollView, Alert, RefreshControl, ActivityIndicator, TextInput, Modal, Pressable,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import {
   getTransactionsByDate, deleteTransaction, getFunds, addFundMovement, getSetting, setSetting,
-  startWorkSession, endWorkSession, Transaction,
+  startWorkSession, endWorkSession, getWorkSessions, Transaction,
 } from '../src/db';
 import { formatCurrency, formatLongDate, formatKm, nowString, todayString } from '../src/format';
 import { getCategoryLabel, getCategoryIcon, RENT_CATEGORY } from '../src/categories';
 import {
   requestNotificationPermission, startWorkDay, endWorkDay, isWorkDayActive,
 } from '../src/notifications';
-import { getVehicleConfig, calcRealEarnings, getFleetAlerts } from '../src/vehicleCalc';
+import { getVehicleConfig, getFleetAlerts } from '../src/vehicleCalc';
 import type { VehicleAlert } from '../src/fleet';
-import { computeBalance, calcDailyGoal, DailyGoal } from '../src/financeCalc';
+import { computeBalance, calcDailyGoal, DailyGoal, mechanicShare, MECHANIC_PCT } from '../src/financeCalc';
+import { C, T, S, R, TOUCH } from '../src/theme';
+import { Amount, Banner, Button, Icon, Section, Hint } from './ui';
 
 // Ahorro para el mecánico ya hecho hoy: "fecha|monto"
 const MAINT_SAVED_KEY = 'maint_saved_today';
+// Km del día escritos por el usuario: "fecha|km"
+const KM_TODAY_KEY = 'km_today';
 
 interface Props {
-  onAddIncome:    () => void;
-  onAddExpense:   () => void;
-  onOpenVehicles: () => void;
+  onAddIncome:   () => void;
+  onAddExpense:  () => void;
+  onOpenVehicle: (vehicleId: number) => void;
   refreshTrigger: number;
 }
 
-export default function TodayScreen({ onAddIncome, onAddExpense, onOpenVehicles, refreshTrigger }: Props) {
+// "YYYY-MM-DD HH:MM" → minutos desde medianoche del día de inicio
+const minutesBetween = (a: string, b: string) =>
+  Math.max((new Date(b.replace(' ', 'T')).getTime() - new Date(a.replace(' ', 'T')).getTime()) / 60000, 0);
+
+const describeHours = (min: number) => {
+  const h = Math.floor(min / 60), m = Math.round(min % 60);
+  return h === 0 ? `${m} min` : m === 0 ? `${h} h` : `${h} h ${m} min`;
+};
+
+export default function TodayScreen({ onAddIncome, onAddExpense, onOpenVehicle, refreshTrigger }: Props) {
   const today = todayString();
 
-  const [transactions, setTransactions]   = useState<Transaction[]>([]);
-  const [refreshing, setRefreshing]       = useState(false);
-  const [working, setWorking]             = useState(false);
-  const [workLoading, setWorkLoading]     = useState(true);
-  const [showRealCalc, setShowRealCalc]   = useState(false);
-  const [kmInput, setKmInput]             = useState('');
-  const [alerts, setAlerts]               = useState<VehicleAlert[]>([]);
-  const [goal, setGoal]                   = useState<DailyGoal | null>(null);
-  const [savedToday, setSavedToday]       = useState(0);
+  const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [refreshing, setRefreshing]     = useState(false);
+  const [working, setWorking]           = useState(false);
+  const [workLoading, setWorkLoading]   = useState(true);
+  const [sheet, setSheet]               = useState<'mechanic' | 'close' | null>(null);
+  const [km, setKm]                     = useState(0);
+  const [alerts, setAlerts]             = useState<VehicleAlert[]>([]);
+  const [goal, setGoal]                 = useState<DailyGoal | null>(null);
+  const [savedToday, setSavedToday]     = useState(0);
 
   const load = useCallback(() => {
     const txs = getTransactionsByDate(today);
@@ -50,6 +63,8 @@ export default function TodayScreen({ onAddIncome, onAddExpense, onOpenVehicles,
       : calcDailyGoal(b.monthlyObligations, b.currentMonthNet, todayNet, b.workingDaysEstLeft));
     const [date, amount] = getSetting(MAINT_SAVED_KEY, '').split('|');
     setSavedToday(date === today ? Number(amount) || 0 : 0);
+    const [kmDate, kmValue] = getSetting(KM_TODAY_KEY, '').split('|');
+    setKm(kmDate === today ? Number(kmValue) || 0 : 0);
   }, [today]);
 
   useEffect(() => { load(); }, [load, refreshTrigger]);
@@ -61,12 +76,24 @@ export default function TodayScreen({ onAddIncome, onAddExpense, onOpenVehicles,
 
   const income  = transactions.filter(t => t.type === 'income').reduce((s, t) => s + t.amount, 0);
   const expense = transactions.filter(t => t.type === 'expense').reduce((s, t) => s + t.amount, 0);
-  const net     = income - expense;
+  // Solo lo ganado manejando gasta el carro (el arriendo de otro carro no cuenta)
+  const driveIncome = transactions
+    .filter(t => t.type === 'income' && t.category !== RENT_CATEGORY)
+    .reduce((s, t) => s + t.amount, 0);
+  const cfg      = getVehicleConfig();
+  const mechanic = mechanicShare(driveIncome, km, cfg.maintenanceCostPerKm);
+  const left     = income - expense - mechanic.amount;   // "Me queda"
+  const toSave   = Math.max(mechanic.amount - savedToday, 0);
 
-  const handleDelete = (id: number) =>
-    Alert.alert('Eliminar', '¿Eliminar este registro?', [
+  const saveKm = (value: number) => {
+    setSetting(KM_TODAY_KEY, `${today}|${value}`);
+    setKm(value);
+  };
+
+  const handleDelete = (t: Transaction) =>
+    Alert.alert('Borrar movimiento', `¿Borrar ${getCategoryLabel(t.type, t.category)} de ${formatCurrency(t.amount)}?`, [
       { text: 'Cancelar', style: 'cancel' },
-      { text: 'Eliminar', style: 'destructive', onPress: () => { deleteTransaction(id); load(); } },
+      { text: 'Borrar', style: 'destructive', onPress: () => { deleteTransaction(t.id); load(); } },
     ]);
 
   const handleStartDay = async () => {
@@ -84,332 +111,293 @@ export default function TodayScreen({ onAddIncome, onAddExpense, onOpenVehicles,
   };
 
   const handleEndDay = () =>
-    Alert.alert('Finalizar jornada', '¿Detener los recordatorios del día?', [
+    Alert.alert('Terminar el día', 'Se apagan los recordatorios y te muestro el resumen del día.', [
       { text: 'Cancelar', style: 'cancel' },
-      { text: 'Sí, finalizar', style: 'destructive', onPress: async () => {
+      { text: 'Terminar', onPress: async () => {
         endWorkSession(nowString());
         setWorkLoading(true); await endWorkDay(); setWorking(false); setWorkLoading(false);
-        // Abre la calculadora para anotar los km y separar lo del mecánico
-        if (driveIncome > 0) setShowRealCalc(true);
+        setSheet('close');
       }},
     ]);
-
-  // Calculadora ganancia real: solo lo que se ganó manejando (el arriendo del carro no cuenta)
-  const cfg = getVehicleConfig();
-  const km  = Number(kmInput) || 0;
-  const driveIncome = transactions
-    .filter(t => t.type === 'income' && t.category !== RENT_CATEGORY)
-    .reduce((s, t) => s + t.amount, 0);
-  const real = driveIncome > 0 && km > 0 ? calcRealEarnings(driveIncome, km, cfg) : null;
 
   // Fondo del mecánico (el que se creó por defecto; si lo renombraron, el del ícono 🔧)
   const saveForMechanic = (amount: number) => {
     const funds = getFunds();
     const fund = funds.find(f => f.name === 'Mecánico') ?? funds.find(f => f.icon === '🔧');
     if (!fund) {
-      Alert.alert('Sin fondo', 'No encontré el fondo del mecánico. Créalo en 💼 Fondos.');
+      Alert.alert('Sin fondo', 'No encontré el fondo del mecánico. Créalo en Fondos.');
       return;
     }
-    Alert.alert('Separar para el mecánico',
-      `¿Pasar ${formatCurrency(amount)} al fondo ${fund.name}? Es la plata que se gasta el carro por los ${formatKm(km)} km de hoy.`, [
-        { text: 'Cancelar', style: 'cancel' },
-        { text: 'Sí, separar', onPress: () => {
-          addFundMovement(fund.id, amount, `Mantenimiento · ${formatKm(km)} km`, today);
-          const total = savedToday + amount;
-          setSetting(MAINT_SAVED_KEY, `${today}|${total}`);
-          setSavedToday(total);
-        }},
-      ]);
+    Alert.alert('Separar para el mecánico', `¿Pasar ${formatCurrency(amount)} al fondo ${fund.name}?`, [
+      { text: 'Cancelar', style: 'cancel' },
+      { text: 'Sí, separar', onPress: () => {
+        addFundMovement(fund.id, amount, mechanic.byKm ? `Mantenimiento · ${formatKm(km)} km` : `Mantenimiento · ${MECHANIC_PCT} % del día`, today);
+        const total = savedToday + amount;
+        setSetting(MAINT_SAVED_KEY, `${today}|${total}`);
+        setSavedToday(total);
+      }},
+    ]);
   };
+
+  const sessionsMin = getWorkSessions(today, today)
+    .reduce((s, w) => s + minutesBetween(w.start_at, w.end_at ?? nowString()), 0);
+  const goalPct = goal && goal.goal > 0 ? Math.min(Math.max(1 - goal.left / goal.goal, 0), 1) : 0;
 
   return (
     <View style={s.container}>
       <View style={s.header}>
-        <Text style={s.headerDate}>{formatLongDate(today)}</Text>
+        <Text style={T.headline} accessibilityRole="header">Hoy</Text>
+        <Text style={T.bodySm}>{formatLongDate(today)}</Text>
       </View>
 
       <ScrollView
         contentContainerStyle={s.scroll}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#aaa" />}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={C.textMuted} />}
       >
-        {/* ── Botón jornada ── */}
-        {workLoading ? (
-          <View style={s.workCardLoading}><ActivityIndicator color="#00C853" /></View>
-        ) : !working ? (
-          <TouchableOpacity style={s.startBtn} onPress={handleStartDay} activeOpacity={0.8}>
-            <Text style={s.startIcon}>🚀</Text>
-            <View>
-              <Text style={s.startTitle}>¡Empecemos el día!</Text>
-              <Text style={s.startSub}>Activa recordatorios cada 2 horas</Text>
+        {/* ── Me queda ── */}
+        <View style={s.hero}>
+          <Text style={T.label}>Me queda hoy</Text>
+          <Text style={[T.display, { color: left < 0 ? C.spend : C.text }]}>
+            {left < 0 ? '−' : ''}{formatCurrency(left)}
+          </Text>
+          <View style={s.heroRows}>
+            <View style={s.heroRow}>
+              <Text style={T.bodySm}>Gané</Text>
+              <Amount value={income} kind="in" />
             </View>
-          </TouchableOpacity>
-        ) : (
-          <View style={s.workingCard}>
-            <View style={s.workingLeft}>
-              <View style={s.dot} />
-              <View>
-                <Text style={s.workingTitle}>Jornada activa</Text>
-                <Text style={s.workingSub}>Recordatorios cada 2 horas</Text>
+            <View style={s.heroRow}>
+              <Text style={T.bodySm}>Gasté</Text>
+              <Amount value={expense} kind="out" />
+            </View>
+            <Pressable
+              style={({ pressed }) => [s.heroRow, s.heroTap, pressed && { opacity: 0.8 }]}
+              onPress={() => setSheet('mechanic')}
+              disabled={driveIncome === 0}
+              accessibilityRole="button"
+              accessibilityHint="Muestra cómo se calcula y deja escribir los km"
+            >
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: S.xs }}>
+                <Text style={T.bodySm}>Para el mecánico</Text>
+                {driveIncome > 0 && <Icon name="information-outline" size={18} color={C.primary} />}
               </View>
-            </View>
-            <TouchableOpacity style={s.endBtn} onPress={handleEndDay}>
-              <Text style={s.endBtnTxt}>Día finalizado</Text>
-            </TouchableOpacity>
+              <Amount value={mechanic.amount} kind={mechanic.amount > 0 ? 'out' : 'neutral'} />
+            </Pressable>
           </View>
-        )}
-
-        {/* ── Avisos de los carros (SOAT, mantenimientos…) ── */}
-        {alerts.length > 0 && (
-          <TouchableOpacity
-            style={[s.alertCard, alerts[0].level === 'red' ? s.alertRed : s.alertYellow]}
-            onPress={onOpenVehicles}
-            activeOpacity={0.8}
-          >
-            {alerts.slice(0, 2).map((a, i) => (
-              <Text key={i} style={[s.alertTxt, { color: a.level === 'red' ? '#F44336' : '#FFC107' }]}>
-                {a.icon} {a.text}
-              </Text>
-            ))}
-            <Text style={s.alertMore}>
-              {alerts.length > 2 ? `+${alerts.length - 2} más · ` : ''}Toca para ver en Carros ›
+          {driveIncome > 0 && (
+            <Text style={[T.labelSm, { marginTop: S.xs }]}>
+              {mechanic.byKm ? `Por ${formatKm(km)} km` : `${MECHANIC_PCT} % de lo de Uber · toca para poner los km`}
+              {savedToday > 0 ? ` · ya separaste ${formatCurrency(savedToday)}` : ''}
             </Text>
-          </TouchableOpacity>
+          )}
+        </View>
+
+        {/* ── Avisos de los carros (una línea, lleva al carro) ── */}
+        {alerts.length > 0 && (
+          <Banner
+            tone={alerts[0].level === 'red' ? 'spend' : 'warn'}
+            icon={alerts[0].level === 'red' ? 'alert-circle' : 'alert'}
+            text={alerts[0].text}
+            detail={alerts.length > 1 ? `Y ${alerts.length - 1} aviso${alerts.length > 2 ? 's' : ''} más en Carros` : undefined}
+            onPress={() => onOpenVehicle(alerts[0].vehicleId)}
+          />
         )}
 
         {/* ── Meta del día ── */}
         {goal && (
-          <View style={[s.goalCard, goal.left === 0 && s.goalDone]}>
+          <Section>
             {goal.monthCovered ? (
-              <Text style={s.goalTitleDone}>✅ Ya cubriste los gastos del mes</Text>
+              <View style={s.goalDone}>
+                <Icon name="check-circle" color={C.money} />
+                <Text style={[T.titleSm, { color: C.money, flex: 1 }]}>Ya cubriste los gastos del mes</Text>
+              </View>
             ) : goal.left === 0 ? (
-              <Text style={s.goalTitleDone}>✅ Meta de hoy cumplida ({formatCurrency(goal.goal)})</Text>
+              <View style={s.goalDone}>
+                <Icon name="check-circle" color={C.money} />
+                <Text style={[T.titleSm, { color: C.money, flex: 1 }]}>Meta de hoy cumplida: {formatCurrency(goal.goal)}</Text>
+              </View>
             ) : (
               <>
-                <Text style={s.goalTitle}>🎯 Hoy necesitas {formatCurrency(goal.goal)}</Text>
-                <Text style={s.goalSub}>Te faltan {formatCurrency(goal.left)} para ir al día con los gastos del mes</Text>
-                <View style={s.goalBar}>
-                  <View style={[s.goalFill, { width: `${Math.round(Math.min(Math.max(1 - goal.left / goal.goal, 0), 1) * 100)}%` }]} />
+                <View style={s.goalHead}>
+                  <Text style={T.titleSm}>Meta de hoy</Text>
+                  <Text style={[T.amount, { fontVariant: ['tabular-nums'] }]}>{formatCurrency(goal.goal)}</Text>
                 </View>
+                <View style={s.bar} accessibilityRole="progressbar" accessibilityValue={{ min: 0, max: 100, now: Math.round(goalPct * 100) }}>
+                  <View style={[s.barFill, { width: `${Math.round(goalPct * 100)}%` }]} />
+                </View>
+                <Text style={T.bodySm}>Te faltan {formatCurrency(goal.left)} para ir al día con los gastos del mes</Text>
               </>
             )}
-          </View>
+          </Section>
         )}
 
-        {/* ── Cards resumen ── */}
-        <View style={s.row}>
-          <View style={[s.card, s.cardGreen]}>
-            <Text style={s.cardLabel}>Lo que gané</Text>
-            <Text style={s.cardAmount}>{formatCurrency(income)}</Text>
-          </View>
-          <View style={[s.card, s.cardRed]}>
-            <Text style={s.cardLabel}>Lo que gasté</Text>
-            <Text style={s.cardAmount}>{formatCurrency(expense)}</Text>
-          </View>
-        </View>
-
-        <View style={[s.netCard, net >= 0 ? s.netPos : s.netNeg]}>
-          <Text style={s.netLabel}>Me queda</Text>
-          <Text style={s.netAmount}>{net < 0 ? '-' : ''}{formatCurrency(net)}</Text>
-          {income > 0 && (
-            <Text style={s.effText}>Eficiencia: {Math.round((net / income) * 100)}%</Text>
-          )}
-        </View>
-
-        {/* ── Calculadora ganancia real ── */}
-        {driveIncome > 0 && (
-          <View style={s.realCard}>
-            <TouchableOpacity style={s.realHeader} onPress={() => setShowRealCalc(v => !v)}>
-              <Text style={s.realTitle}>🔍 ¿Cuánto gané de verdad?</Text>
-              <Text style={s.realChevron}>{showRealCalc ? '▲' : '▼'}</Text>
-            </TouchableOpacity>
-
-            {showRealCalc && (
-              <View style={s.realBody}>
-                <Text style={s.realHint}>Ingresa los km trabajados hoy ({cfg.vehicleName}) para calcular tu ganancia real descontando {cfg.energy === 'electric' ? 'la carga' : 'gasolina'}, {cfg.uberPassActive ? 'Uber Pass' : 'comisión Uber'} y mantenimiento.</Text>
-                <View style={s.kmRow}>
-                  <TextInput
-                    style={s.kmInput}
-                    value={kmInput}
-                    onChangeText={t => setKmInput(t.replace(/\D/g, ''))}
-                    keyboardType="number-pad"
-                    placeholder="0"
-                    placeholderTextColor="#444"
-                  />
-                  <Text style={s.kmLabel}>km recorridos hoy</Text>
-                </View>
-
-                {real ? (
-                  <View style={s.breakdown}>
-                    <View style={s.bRow}>
-                      <Text style={s.bLabel}>Bruto (lo que muestra Uber)</Text>
-                      <Text style={s.bValWhite}>{formatCurrency(real.grossIncome)}</Text>
-                    </View>
-                    {cfg.uberPassActive ? (
-                      <View style={s.bRow}>
-                        <Text style={s.bLabel}>Uber Pass (por día trabajado)</Text>
-                        <Text style={s.bValRed}>-{formatCurrency(real.uberPassDaily)}</Text>
-                      </View>
-                    ) : (
-                      <View style={s.bRow}>
-                        <Text style={s.bLabel}>Comisión Uber ({cfg.uberCommissionPct}%)</Text>
-                        <Text style={s.bValRed}>-{formatCurrency(real.uberCommission)}</Text>
-                      </View>
-                    )}
-                    <View style={s.bRow}>
-                      <Text style={s.bLabel}>{cfg.energy === 'electric' ? 'Carga eléctrica' : 'Gasolina'} ({km} km)</Text>
-                      <Text style={s.bValRed}>-{formatCurrency(real.energyCost)}</Text>
-                    </View>
-                    <View style={s.bRow}>
-                      <Text style={s.bLabel}>Provisión mecánico</Text>
-                      <Text style={s.bValRed}>-{formatCurrency(real.maintenanceCost)}</Text>
-                    </View>
-                    <View style={s.bDivider} />
-                    <View style={s.bRow}>
-                      <Text style={s.bLabelBold}>Ganancia real</Text>
-                      <Text style={[s.bValBold, { color: real.netReal >= 0 ? '#00C853' : '#F44336' }]}>
-                        {real.netReal < 0 ? '-' : ''}{formatCurrency(real.netReal)}
-                      </Text>
-                    </View>
-                    <Text style={s.costPerKm}>Costo por km: {formatCurrency(real.costPerKm)}</Text>
-
-                    {/* Separar lo del mecánico */}
-                    {real.maintenanceCost > 0 && (
-                      savedToday >= real.maintenanceCost ? (
-                        <Text style={s.savedTxt}>✓ Hoy ya separaste {formatCurrency(savedToday)} para el mecánico</Text>
-                      ) : (
-                        <TouchableOpacity
-                          style={s.saveMaintBtn}
-                          onPress={() => saveForMechanic(real.maintenanceCost - savedToday)}
-                          activeOpacity={0.8}
-                        >
-                          <Text style={s.saveMaintTitle}>🔧 Separa {formatCurrency(real.maintenanceCost - savedToday)} para el mecánico</Text>
-                          <Text style={s.saveMaintSub}>Toca para pasarlo al fondo Mecánico</Text>
-                        </TouchableOpacity>
-                      )
-                    )}
-                  </View>
-                ) : (
-                  km > 0 ? null : <Text style={s.realHintSmall}>Escribe los km para ver el cálculo.</Text>
-                )}
+        {/* ── Jornada ── */}
+        <Section>
+          {workLoading ? (
+            <ActivityIndicator color={C.primary} style={{ minHeight: TOUCH }} />
+          ) : working ? (
+            <View style={s.workRow}>
+              <View style={s.liveDot} />
+              <View style={{ flex: 1 }}>
+                <Text style={T.titleSm}>Estás trabajando</Text>
+                <Text style={T.labelSm}>{describeHours(sessionsMin)} · te recuerdo anotar cada 2 horas</Text>
               </View>
-            )}
-          </View>
-        )}
-
-        {/* ── Lista transacciones ── */}
-        {transactions.length === 0 ? (
-          <Text style={s.empty}>Sin registros hoy.{'\n'}Agrega tu primer ingreso o gasto.</Text>
-        ) : (
-          <View>
-            <Text style={s.listTitle}>MOVIMIENTOS DE HOY</Text>
-            {transactions.map(t => (
-              <TouchableOpacity key={t.id} style={s.txRow} onLongPress={() => handleDelete(t.id)} activeOpacity={0.7}>
-                <Text style={s.txIcon}>{getCategoryIcon(t.type, t.category)}</Text>
-                <View style={s.txInfo}>
-                  <Text style={s.txCat}>{getCategoryLabel(t.type, t.category)}</Text>
-                  {t.note ? <Text style={s.txNote}>{t.note}</Text> : null}
-                </View>
-                <Text style={[s.txAmt, t.type === 'income' ? s.green : s.red]}>
-                  {t.type === 'income' ? '+' : '-'}{formatCurrency(t.amount)}
+              <Button label="Terminar" variant="tonal" tone="neutral" onPress={handleEndDay} />
+            </View>
+          ) : (
+            <View style={s.workRow}>
+              <View style={{ flex: 1 }}>
+                <Text style={T.titleSm}>{sessionsMin > 0 ? 'Día terminado' : '¿Sales a trabajar?'}</Text>
+                <Text style={T.labelSm}>
+                  {sessionsMin > 0 ? `Trabajaste ${describeHours(sessionsMin)}` : 'Te recuerdo anotar cada 2 horas'}
                 </Text>
-              </TouchableOpacity>
-            ))}
-            <Text style={s.hint}>Mantén presionado para eliminar</Text>
-          </View>
-        )}
+              </View>
+              {sessionsMin > 0
+                ? <Button label="Resumen" variant="tonal" tone="neutral" onPress={() => setSheet('close')} />
+                : <Button label="Empezar" icon="play" variant="tonal" tone="money" onPress={handleStartDay} />}
+            </View>
+          )}
+        </Section>
+
+        {/* ── Movimientos de hoy ── */}
+        <Section title="Movimientos de hoy">
+          {transactions.length === 0 ? (
+            <Text style={[T.bodySm, { paddingVertical: S.md }]}>Todavía no anotas nada hoy. Usa los botones de abajo.</Text>
+          ) : transactions.map((t, i) => (
+            <View key={t.id} style={[s.txRow, i < transactions.length - 1 && s.txDivider]}>
+              <Text style={s.txIcon}>{getCategoryIcon(t.type, t.category)}</Text>
+              <View style={{ flex: 1 }}>
+                <Text style={T.body}>{getCategoryLabel(t.type, t.category)}</Text>
+                {t.note ? <Text style={T.labelSm} numberOfLines={1}>{t.note}</Text> : null}
+              </View>
+              <Amount value={t.amount} kind={t.type === 'income' ? 'in' : 'out'} />
+              <Pressable
+                onPress={() => handleDelete(t)}
+                style={s.iconBtn}
+                accessibilityRole="button"
+                accessibilityLabel={`Borrar ${getCategoryLabel(t.type, t.category)}`}
+                hitSlop={4}
+              >
+                <Icon name="trash-can-outline" size={22} color={C.textFaint} />
+              </Pressable>
+            </View>
+          ))}
+        </Section>
       </ScrollView>
 
       {/* ── Botones acción ── */}
       <View style={s.actions}>
-        <TouchableOpacity style={[s.btn, s.btnGreen]} onPress={onAddIncome}>
-          <Text style={s.btnText}>+ Ingreso</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={[s.btn, s.btnRed]} onPress={onAddExpense}>
-          <Text style={s.btnText}>+ Gasto</Text>
-        </TouchableOpacity>
+        <Button label="Ingreso" icon="plus" tone="money" big style={{ flex: 1 }} onPress={onAddIncome} />
+        <Button label="Gasto" icon="minus" tone="spend" big style={{ flex: 1 }} onPress={onAddExpense} />
       </View>
+
+      {/* ── Lo del mecánico / resumen del día ── */}
+      <Modal visible={sheet !== null} animationType="slide" transparent onRequestClose={() => setSheet(null)}>
+        <Pressable style={s.scrim} onPress={() => setSheet(null)} accessibilityLabel="Cerrar" />
+        <SafeAreaView edges={['bottom']} style={s.sheet}>
+          <View style={s.handle} />
+          {sheet === 'close' && (
+            <>
+              <Text style={T.title}>Resumen del día</Text>
+              <View style={s.sumGrid}>
+                <SumCell label="Trabajaste" value={sessionsMin > 0 ? describeHours(sessionsMin) : '—'} />
+                <SumCell
+                  label="Por hora"
+                  value={sessionsMin >= 30 ? formatCurrency(left / (sessionsMin / 60)) : '—'}
+                />
+              </View>
+            </>
+          )}
+          {sheet === 'mechanic' && <Text style={T.title}>Para el mecánico</Text>}
+
+          <View style={s.sumLines}>
+            <SumLine label="Gané" value={<Amount value={income} kind="in" />} />
+            <SumLine label="Gasté" value={<Amount value={expense} kind="out" />} />
+            <SumLine label="Para el mecánico" value={<Amount value={mechanic.amount} kind="out" />} />
+            <View style={s.sumDivider} />
+            <SumLine label="Me queda" bold value={
+              <Text style={[T.headline, { color: left < 0 ? C.spend : C.text }]}>{left < 0 ? '−' : ''}{formatCurrency(left)}</Text>
+            } />
+          </View>
+
+          <Text style={[T.label, { marginTop: S.lg }]}>Km que hiciste hoy (opcional)</Text>
+          <View style={s.kmRow}>
+            <TextInput
+              style={s.kmInput}
+              value={km > 0 ? String(km) : ''}
+              onChangeText={v => saveKm(Number(v.replace(/\D/g, '')) || 0)}
+              keyboardType="number-pad"
+              placeholder="0"
+              placeholderTextColor={C.textFaint}
+              accessibilityLabel="Km que hiciste hoy"
+            />
+            <Text style={[T.bodySm, { flex: 1 }]}>
+              {km > 0
+                ? `${formatKm(km)} km × ${formatCurrency(cfg.maintenanceCostPerKm)} por km (${cfg.vehicleName})`
+                : `Sin km separo el ${MECHANIC_PCT} % de lo que ganaste manejando`}
+            </Text>
+          </View>
+
+          {toSave > 0 ? (
+            <Button label={`Separar ${formatCurrency(toSave)} para el mecánico`} icon="wrench" variant="tonal" tone="warn" big onPress={() => saveForMechanic(toSave)} />
+          ) : savedToday > 0 ? (
+            <View style={s.goalDone}>
+              <Icon name="check-circle" color={C.money} />
+              <Text style={[T.label, { color: C.money }]}>Hoy ya separaste {formatCurrency(savedToday)} para el mecánico</Text>
+            </View>
+          ) : null}
+          <Hint>Separar lo pasa al fondo Mecánico, en Fondos.</Hint>
+          <Button label="Listo" variant="text" onPress={() => setSheet(null)} style={{ marginTop: S.sm }} />
+        </SafeAreaView>
+      </Modal>
+    </View>
+  );
+}
+
+function SumCell({ label, value }: { label: string; value: string }) {
+  return (
+    <View style={s.sumCell}>
+      <Text style={T.labelSm}>{label}</Text>
+      <Text style={[T.title, { fontVariant: ['tabular-nums'] }]}>{value}</Text>
+    </View>
+  );
+}
+
+function SumLine({ label, value, bold }: { label: string; value: React.ReactNode; bold?: boolean }) {
+  return (
+    <View style={s.sumLine}>
+      <Text style={bold ? T.titleSm : T.body}>{label}</Text>
+      {value}
     </View>
   );
 }
 
 const s = StyleSheet.create({
-  container:      { flex: 1, backgroundColor: '#121212' },
-  header:         { paddingHorizontal: 20, paddingTop: 16, paddingBottom: 4 },
-  headerDate:     { color: '#aaa', fontSize: 16, textTransform: 'capitalize' },
-  scroll:         { padding: 16, paddingBottom: 20 },
-  workCardLoading:{ height: 68, backgroundColor: '#1a1a1a', borderRadius: 18, alignItems: 'center', justifyContent: 'center', marginBottom: 14 },
-  startBtn:       { flexDirection: 'row', alignItems: 'center', gap: 14, backgroundColor: '#0a3020', borderRadius: 18, padding: 18, marginBottom: 14, borderWidth: 1.5, borderColor: '#00C853' },
-  startIcon:      { fontSize: 28 },
-  startTitle:     { color: '#00C853', fontSize: 17, fontWeight: '800' },
-  startSub:       { color: '#4caf7a', fontSize: 12, marginTop: 2 },
-  workingCard:    { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#0a1e12', borderRadius: 18, padding: 16, marginBottom: 14, borderWidth: 1, borderColor: '#1e4d2b' },
-  workingLeft:    { flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 },
-  dot:            { width: 10, height: 10, borderRadius: 5, backgroundColor: '#00C853' },
-  workingTitle:   { color: '#00C853', fontSize: 14, fontWeight: '700' },
-  workingSub:     { color: '#4caf7a', fontSize: 11, marginTop: 2 },
-  endBtn:         { backgroundColor: '#2a0a0a', borderRadius: 12, paddingVertical: 8, paddingHorizontal: 12, borderWidth: 1, borderColor: '#F44336' },
-  endBtnTxt:      { color: '#F44336', fontSize: 13, fontWeight: '700' },
-  alertCard:      { borderRadius: 16, padding: 14, marginBottom: 14, borderWidth: 1 },
-  alertRed:       { backgroundColor: '#2e0a0a', borderColor: '#F44336' },
-  alertYellow:    { backgroundColor: '#1a1a00', borderColor: '#FFC10760' },
-  alertTxt:       { fontSize: 14, fontWeight: '600', lineHeight: 20, marginBottom: 4 },
-  alertMore:      { color: '#888', fontSize: 12, marginTop: 2 },
-  row:            { flexDirection: 'row', gap: 12, marginBottom: 12 },
-  card:           { flex: 1, borderRadius: 16, padding: 16 },
-  cardGreen:      { backgroundColor: '#0a2e1a' },
-  cardRed:        { backgroundColor: '#2e0a0a' },
-  cardLabel:      { color: '#aaa', fontSize: 13, marginBottom: 6 },
-  cardAmount:     { color: '#fff', fontSize: 20, fontWeight: '700' },
-  netCard:        { borderRadius: 20, padding: 24, alignItems: 'center', marginBottom: 16 },
-  netPos:         { backgroundColor: '#0d3320' },
-  netNeg:         { backgroundColor: '#3d0a0a' },
-  netLabel:       { color: '#aaa', fontSize: 16, marginBottom: 8 },
-  netAmount:      { color: '#fff', fontSize: 38, fontWeight: '800' },
-  effText:        { color: '#aaa', fontSize: 13, marginTop: 8 },
-  realCard:       { backgroundColor: '#1a1a1a', borderRadius: 18, marginBottom: 16, overflow: 'hidden' },
-  realHeader:     { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16 },
-  realTitle:      { color: '#FFC107', fontSize: 15, fontWeight: '700' },
-  realChevron:    { color: '#FFC107', fontSize: 12 },
-  realBody:       { padding: 16, paddingTop: 0 },
-  realHint:       { color: '#666', fontSize: 13, lineHeight: 20, marginBottom: 14 },
-  realHintSmall:  { color: '#555', fontSize: 12, textAlign: 'center', marginTop: 8 },
-  kmRow:          { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 16 },
-  kmInput:        { backgroundColor: '#262626', borderRadius: 12, padding: 12, color: '#fff', fontSize: 22, fontWeight: '700', width: 100, textAlign: 'center' },
-  kmLabel:        { color: '#aaa', fontSize: 15 },
-  breakdown:      { backgroundColor: '#222', borderRadius: 14, padding: 14 },
-  bRow:           { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 6 },
-  bLabel:         { color: '#aaa', fontSize: 13, flex: 1 },
-  bLabelBold:     { color: '#fff', fontSize: 14, fontWeight: '700', flex: 1 },
-  bValWhite:      { color: '#fff', fontSize: 13, fontWeight: '600' },
-  bValRed:        { color: '#F44336', fontSize: 13, fontWeight: '600' },
-  bValBold:       { fontSize: 16, fontWeight: '800' },
-  bDivider:       { height: 1, backgroundColor: '#333', marginVertical: 6 },
-  costPerKm:      { color: '#666', fontSize: 11, textAlign: 'center', marginTop: 8 },
-  saveMaintBtn:   { backgroundColor: '#1a1500', borderRadius: 12, padding: 12, marginTop: 12, borderWidth: 1, borderColor: '#FFC107' },
-  saveMaintTitle: { color: '#FFC107', fontSize: 14, fontWeight: '700' },
-  saveMaintSub:   { color: '#a88a2a', fontSize: 12, marginTop: 2 },
-  savedTxt:       { color: '#00C853', fontSize: 13, fontWeight: '600', textAlign: 'center', marginTop: 12 },
-  goalCard:       { backgroundColor: '#1a1a1a', borderRadius: 16, padding: 14, marginBottom: 12, borderWidth: 1, borderColor: '#333' },
-  goalDone:       { backgroundColor: '#0a1e12', borderColor: '#1e4d2b' },
-  goalTitle:      { color: '#fff', fontSize: 16, fontWeight: '800' },
-  goalTitleDone:  { color: '#00C853', fontSize: 15, fontWeight: '700' },
-  goalSub:        { color: '#888', fontSize: 12, marginTop: 4 },
-  goalBar:        { height: 8, backgroundColor: '#262626', borderRadius: 4, marginTop: 10, overflow: 'hidden' },
-  goalFill:       { height: 8, backgroundColor: '#00C853', borderRadius: 4 },
-  empty:          { color: '#555', textAlign: 'center', marginTop: 48, fontSize: 16, lineHeight: 26 },
-  listTitle:      { color: '#555', fontSize: 12, letterSpacing: 1, marginBottom: 10 },
-  txRow:          { flexDirection: 'row', alignItems: 'center', backgroundColor: '#1e1e1e', borderRadius: 14, padding: 14, gap: 12, marginBottom: 8 },
-  txIcon:         { fontSize: 22 },
-  txInfo:         { flex: 1 },
-  txCat:          { color: '#fff', fontSize: 16, fontWeight: '600' },
-  txNote:         { color: '#888', fontSize: 13, marginTop: 2 },
-  txAmt:          { fontSize: 16, fontWeight: '700' },
-  green:          { color: '#00C853' },
-  red:            { color: '#F44336' },
-  hint:           { color: '#444', fontSize: 11, textAlign: 'center', marginTop: 4 },
-  actions:        { flexDirection: 'row', gap: 12, padding: 16, paddingBottom: 8, backgroundColor: '#121212', borderTopColor: '#222', borderTopWidth: 1 },
-  btn:            { flex: 1, height: 58, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
-  btnGreen:       { backgroundColor: '#00C853' },
-  btnRed:         { backgroundColor: '#F44336' },
-  btnText:        { color: '#fff', fontSize: 17, fontWeight: '700' },
+  container: { flex: 1, backgroundColor: C.bg },
+  header:    { paddingHorizontal: S.lg, paddingTop: S.lg, paddingBottom: S.sm },
+  scroll:    { paddingHorizontal: S.lg, paddingBottom: S.xl },
+  hero:      { backgroundColor: C.surface, borderRadius: R.lg, padding: S.lg, paddingTop: S.lg, marginBottom: S.md },
+  heroRows:  { marginTop: S.md, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: C.outline, paddingTop: S.sm },
+  heroRow:   { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', minHeight: 36 },
+  heroTap:   { minHeight: TOUCH },
+  goalHead:  { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline' },
+  goalDone:  { flexDirection: 'row', alignItems: 'center', gap: S.sm, paddingVertical: S.xs },
+  bar:       { height: 10, backgroundColor: C.surfaceHigh, borderRadius: R.pill, marginVertical: S.sm, overflow: 'hidden' },
+  barFill:   { height: 10, backgroundColor: C.money, borderRadius: R.pill },
+  workRow:   { flexDirection: 'row', alignItems: 'center', gap: S.md },
+  liveDot:   { width: 12, height: 12, borderRadius: 6, backgroundColor: C.money },
+  txRow:     { flexDirection: 'row', alignItems: 'center', gap: S.md, minHeight: 60 },
+  txDivider: { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: C.outline },
+  txIcon:    { fontSize: 22, width: 28, textAlign: 'center' },
+  iconBtn:   { width: TOUCH, height: TOUCH, alignItems: 'center', justifyContent: 'center', marginRight: -S.md },
+  actions:   { flexDirection: 'row', gap: S.md, paddingHorizontal: S.lg, paddingVertical: S.md, backgroundColor: C.bg },
+  scrim:     { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)' },
+  sheet:     { backgroundColor: C.surface, borderTopLeftRadius: 28, borderTopRightRadius: 28, paddingHorizontal: S.xl, paddingBottom: S.lg },
+  handle:    { alignSelf: 'center', width: 32, height: 4, borderRadius: 2, backgroundColor: C.textFaint, marginVertical: S.md },
+  sumGrid:   { flexDirection: 'row', gap: S.md, marginTop: S.md },
+  sumCell:   { flex: 1, backgroundColor: C.surfaceHigh, borderRadius: R.md, padding: S.md },
+  sumLines:  { marginTop: S.md },
+  sumLine:   { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', minHeight: 36 },
+  sumDivider:{ height: StyleSheet.hairlineWidth, backgroundColor: C.outline, marginVertical: S.sm },
+  kmRow:     { flexDirection: 'row', alignItems: 'center', gap: S.md, marginTop: S.sm, marginBottom: S.lg },
+  kmInput:   { ...T.title, backgroundColor: C.surfaceHigh, borderRadius: R.md, paddingHorizontal: S.md, minHeight: 56, width: 110, textAlign: 'center' },
 });

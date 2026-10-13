@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { View, StyleSheet, Modal, StatusBar, TouchableOpacity, Text, ActivityIndicator, Linking } from 'react-native';
+import { View, StyleSheet, Modal, StatusBar, Pressable, Text, ActivityIndicator, Linking } from 'react-native';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { initDatabase } from './src/db';
 import { setupNotifications, refreshVehicleReminders, refreshBackupReminder } from './src/notifications';
@@ -11,15 +11,17 @@ import FundsScreen from './components/FundsScreen';
 import VehiclesScreen from './components/VehiclesScreen';
 import AddTransactionModal from './components/AddTransactionModal';
 import type { TransactionType } from './src/categories';
+import { C, T, S, R } from './src/theme';
+import { Icon, IconName } from './components/ui';
 
 type Tab = 'today' | 'history' | 'balance' | 'funds' | 'vehicles';
 
-const TABS: { id: Tab; label: string; icon: string }[] = [
-  { id: 'today',   label: 'Hoy',      icon: '🏠' },
-  { id: 'history', label: 'Historial', icon: '📅' },
-  { id: 'balance', label: 'Balance',   icon: '💰' },
-  { id: 'funds',   label: 'Fondos',    icon: '💼' },
-  { id: 'vehicles', label: 'Carros',   icon: '🚙' },
+const TABS: { id: Tab; label: string; icon: IconName; iconOn: IconName }[] = [
+  { id: 'today',    label: 'Hoy',       icon: 'home-outline',     iconOn: 'home' },
+  { id: 'history',  label: 'Historial', icon: 'calendar-blank-outline', iconOn: 'calendar-blank' },
+  { id: 'balance',  label: 'Balance',   icon: 'chart-donut',      iconOn: 'chart-donut-variant' },
+  { id: 'funds',    label: 'Fondos',    icon: 'piggy-bank-outline', iconOn: 'piggy-bank' },
+  { id: 'vehicles', label: 'Carros',    icon: 'car-outline',      iconOn: 'car' },
 ];
 
 function AppContent() {
@@ -27,6 +29,7 @@ function AppContent() {
   const [tab, setTab]                = useState<Tab>('today');
   const [modal, setModal]            = useState<TransactionType | null>(null);
   const [refreshTrigger, setRefresh] = useState(0);
+  const [openVehicle, setOpenVehicle] = useState<number | null>(null);  // aviso de Hoy → ese carro
   const [newApk, setNewApk]          = useState(false);
   const insets                       = useSafeAreaInsets();
 
@@ -48,7 +51,7 @@ function AppContent() {
   if (!ready) {
     return (
       <View style={[s.loading, { paddingTop: insets.top }]}>
-        <ActivityIndicator size="large" color="#00C853" />
+        <ActivityIndicator size="large" color={C.primary} />
       </View>
     );
   }
@@ -57,10 +60,13 @@ function AppContent() {
     <View style={[s.root, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
       {/* Aviso de APK nuevo */}
       {newApk && (
-        <TouchableOpacity style={s.updateBar} onPress={() => Linking.openURL(APK_URL)} activeOpacity={0.8}>
-          <Text style={s.updateTitle}>📲 Hay una versión nueva de la app</Text>
-          <Text style={s.updateSub}>Toca aquí para descargarla e instalarla. Tus datos se conservan.</Text>
-        </TouchableOpacity>
+        <Pressable style={s.updateBar} onPress={() => Linking.openURL(APK_URL)} accessibilityRole="button">
+          <Icon name="download-circle" size={26} color={C.money} />
+          <View style={{ flex: 1 }}>
+            <Text style={[T.label, { color: C.money }]}>Hay una versión nueva de la app</Text>
+            <Text style={[T.labelSm, { color: C.text }]}>Toca para descargarla e instalarla. Tus datos se conservan.</Text>
+          </View>
+        </Pressable>
       )}
 
       {/* Screen */}
@@ -70,24 +76,35 @@ function AppContent() {
             refreshTrigger={refreshTrigger}
             onAddIncome={() => setModal('income')}
             onAddExpense={() => setModal('expense')}
-            onOpenVehicles={() => setTab('vehicles')}
+            onOpenVehicle={id => { setOpenVehicle(id); setTab('vehicles'); }}
           />
         )}
         {tab === 'history' && <HistoryScreen />}
         {tab === 'balance' && <BalanceScreen />}
         {tab === 'funds'   && <FundsScreen />}
-        {tab === 'vehicles' && <VehiclesScreen />}
+        {tab === 'vehicles' && <VehiclesScreen openVehicleId={openVehicle} onOpened={() => setOpenVehicle(null)} />}
       </View>
 
-      {/* Bottom Tab Bar */}
-      <View style={s.tabBar}>
-        {TABS.map(t => (
-          <TouchableOpacity key={t.id} style={s.tabItem} onPress={() => setTab(t.id)}>
-            <Text style={s.tabIcon}>{t.icon}</Text>
-            <Text style={[s.tabLabel, tab === t.id && s.tabLabelActive]}>{t.label}</Text>
-            {tab === t.id && <View style={s.tabDot} />}
-          </TouchableOpacity>
-        ))}
+      {/* Barra de navegación (Material 3) */}
+      <View style={s.tabBar} accessibilityRole="tablist">
+        {TABS.map(t => {
+          const on = tab === t.id;
+          return (
+            <Pressable
+              key={t.id}
+              style={s.tabItem}
+              onPress={() => setTab(t.id)}
+              accessibilityRole="tab"
+              accessibilityState={{ selected: on }}
+              accessibilityLabel={t.label}
+            >
+              <View style={[s.tabPill, on && s.tabPillOn]}>
+                <Icon name={on ? t.iconOn : t.icon} size={24} color={on ? C.text : C.textMuted} />
+              </View>
+              <Text style={[s.tabLabel, on && s.tabLabelOn]}>{t.label}</Text>
+            </Pressable>
+          );
+        })}
       </View>
 
       {/* Add Transaction Modal */}
@@ -112,28 +129,21 @@ function AppContent() {
 export default function App() {
   return (
     <SafeAreaProvider>
-      <StatusBar barStyle="light-content" backgroundColor="#121212" translucent />
+      <StatusBar barStyle="light-content" backgroundColor={C.bg} translucent />
       <AppContent />
     </SafeAreaProvider>
   );
 }
 
 const s = StyleSheet.create({
-  root:           { flex: 1, backgroundColor: '#121212' },
-  loading:        { flex: 1, backgroundColor: '#121212', justifyContent: 'center', alignItems: 'center' },
-  screen:         { flex: 1 },
-  updateBar:      { backgroundColor: '#0a3020', borderBottomColor: '#00C853', borderBottomWidth: 1, paddingVertical: 12, paddingHorizontal: 16 },
-  updateTitle:    { color: '#00C853', fontSize: 15, fontWeight: '800' },
-  updateSub:      { color: '#4caf7a', fontSize: 12, marginTop: 2 },
-  tabBar: {
-    flexDirection: 'row',
-    backgroundColor: '#1a1a1a',
-    borderTopColor: '#2a2a2a',
-    borderTopWidth: 1,
-  },
-  tabItem:        { flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: 10, gap: 3 },
-  tabIcon:        { fontSize: 20 },
-  tabLabel:       { color: '#555', fontSize: 11, fontWeight: '600' },
-  tabLabelActive: { color: '#00C853' },
-  tabDot:         { width: 4, height: 4, borderRadius: 2, backgroundColor: '#00C853' },
+  root:       { flex: 1, backgroundColor: C.bg },
+  loading:    { flex: 1, backgroundColor: C.bg, justifyContent: 'center', alignItems: 'center' },
+  screen:     { flex: 1 },
+  updateBar:  { flexDirection: 'row', alignItems: 'center', gap: S.md, backgroundColor: C.moneyContainer, paddingVertical: S.md, paddingHorizontal: S.lg },
+  tabBar:     { flexDirection: 'row', backgroundColor: C.surface, paddingTop: S.md, paddingBottom: S.sm },
+  tabItem:    { flex: 1, alignItems: 'center', gap: S.xs, minHeight: 56 },
+  tabPill:    { width: 64, height: 32, borderRadius: R.pill, alignItems: 'center', justifyContent: 'center' },
+  tabPillOn:  { backgroundColor: C.primaryContainer },
+  tabLabel:   { ...T.labelSm, fontSize: 12 },
+  tabLabelOn: { color: C.text, fontWeight: '700' },
 });

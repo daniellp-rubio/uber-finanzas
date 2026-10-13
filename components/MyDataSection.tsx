@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, TextInput, Alert, Modal } from 'react-native';
+import { View, Text, StyleSheet, TextInput, Alert, Modal } from 'react-native';
 import { getSetting, setSetting } from '../src/db';
 import { lastBackupDate } from '../src/backupData';
 import { shareBackup, pickBackup, restoreWithSafetyCopy } from '../src/backup';
@@ -8,6 +8,8 @@ import { sharePdf } from '../src/pdf';
 import { refreshBackupReminder, refreshVehicleReminders } from '../src/notifications';
 import { daysBetween, formatDate, formatMonth, todayString } from '../src/format';
 import SheetFrame, { ms } from './SheetFrame';
+import { C, T, S, R } from '../src/theme';
+import { Chip, Row, Section } from './ui';
 
 const OWNER_NAME_KEY = 'owner_name';
 const OWNER_ID_KEY   = 'owner_id';
@@ -75,32 +77,34 @@ export default function MyDataSection({ onRestored }: Props) {
   };
 
   return (
-    <View style={s.section}>
-      <Text style={s.title}>📁 MIS DATOS</Text>
-
-      <TouchableOpacity style={[s.bigBtn, overdue && s.bigBtnWarn]} onPress={handleBackup} disabled={busy} activeOpacity={0.8}>
-        <Text style={[s.bigTitle, overdue && { color: '#FFC107' }]}>💾 Guardar copia de seguridad</Text>
-        <Text style={s.bigSub}>
-          {last
-            ? `Última copia: ${daysSince === 0 ? 'hoy' : daysSince === 1 ? 'ayer' : `hace ${daysSince} días`}`
-            : 'Nunca has guardado una copia'}
-          {' · '}Mándala a tu WhatsApp o a Drive
-        </Text>
-      </TouchableOpacity>
-
-      <TouchableOpacity style={s.bigBtn} onPress={() => setShowPdf(true)} activeOpacity={0.8}>
-        <Text style={s.bigTitle}>📄 Resumen de ingresos (PDF)</Text>
-        <Text style={s.bigSub}>Promedio de 3 o 6 meses, para el banco</Text>
-      </TouchableOpacity>
-
-      <TouchableOpacity onPress={handleRestore} style={s.linkBtn}>
-        <Text style={s.linkTxt}>Recuperar una copia (celular nuevo)</Text>
-      </TouchableOpacity>
+    <Section title="Mis datos">
+      <Row
+        icon="content-save-outline"
+        tone={overdue ? 'warn' : 'neutral'}
+        title="Guardar copia de seguridad"
+        subtitle={`${last
+          ? `Última copia: ${daysSince === 0 ? 'hoy' : daysSince === 1 ? 'ayer' : `hace ${daysSince} días`}`
+          : 'Nunca has guardado una copia'} · mándala a tu WhatsApp o a Drive`}
+        onPress={busy ? undefined : handleBackup}
+      />
+      <Row
+        icon="file-pdf-box"
+        title="Resumen de ingresos (PDF)"
+        subtitle="Promedio de 3 o 6 meses, para el banco"
+        onPress={() => setShowPdf(true)}
+      />
+      <Row
+        icon="cellphone-arrow-down"
+        title="Recuperar una copia"
+        subtitle="Para pasar tus datos a un celular nuevo"
+        onPress={handleRestore}
+        last
+      />
 
       <Modal visible={showPdf} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setShowPdf(false)}>
         <IncomePdfModal onClose={() => setShowPdf(false)} />
       </Modal>
-    </View>
+    </Section>
   );
 }
 
@@ -133,52 +137,41 @@ function IncomePdfModal({ onClose }: { onClose: () => void }) {
   };
 
   return (
-    <SheetFrame title="Resumen de ingresos" onClose={onClose} onSave={handleShare} saveLabel={busy ? 'CREANDO…' : 'CREAR PDF'}>
-      <Text style={ms.mLabel}>NOMBRE COMPLETO</Text>
-      <TextInput style={ms.mInput} value={name} onChangeText={setName} placeholder="Como sale en la cédula" placeholderTextColor="#444" />
-      <Text style={ms.mLabel}>CÉDULA (opcional)</Text>
+    <SheetFrame title="Resumen de ingresos" onClose={onClose} onSave={handleShare} saveLabel={busy ? 'Creando…' : 'Crear PDF'}>
+      <Text style={ms.mLabel}>Nombre completo</Text>
+      <TextInput style={ms.mInput} value={name} onChangeText={setName} placeholder="Como sale en la cédula" placeholderTextColor={C.textFaint} />
+      <Text style={ms.mLabel}>Cédula (opcional)</Text>
       <TextInput
         style={ms.mInput} value={id} onChangeText={t => setId(t.replace(/\D/g, ''))}
-        keyboardType="number-pad" placeholder="Solo números" placeholderTextColor="#444"
+        keyboardType="number-pad" placeholder="Solo números" placeholderTextColor={C.textFaint}
       />
 
-      <Text style={ms.mLabel}>¿CUÁNTOS MESES?</Text>
+      <Text style={ms.mLabel}>¿Cuántos meses?</Text>
       <View style={ms.mGrid}>
         {([3, 6] as const).map(m => (
-          <TouchableOpacity key={m} style={[ms.mChip, months === m && ms.mChipOn]} onPress={() => setMonths(m)}>
-            <Text style={[ms.mChipTxt, months === m && ms.mChipTxtOn]}>Últimos {m} meses</Text>
-          </TouchableOpacity>
+          <Chip key={m} label={`Últimos ${m} meses`} selected={months === m} onPress={() => setMonths(m)} />
         ))}
       </View>
 
       {report ? (
         <View style={s.preview}>
-          <Text style={s.previewTxt}>
+          <Text style={T.bodySm}>
             {report.rows.length < months
               ? `Solo hay registros desde ${formatMonth(report.rows[0].month)}: salen ${report.rows.length} ${report.rows.length === 1 ? 'mes' : 'meses'}.`
               : `De ${formatMonth(report.rows[0].month)} a ${formatMonth(report.rows[report.rows.length - 1].month)}.`}
           </Text>
-          <Text style={s.previewTxt}>El mes actual no sale porque no ha terminado.</Text>
+          <Text style={T.bodySm}>El mes actual no sale porque no ha terminado.</Text>
         </View>
       ) : (
-        <Text style={s.previewTxt}>No hay registros en esos meses. El mes actual no cuenta porque no ha terminado.</Text>
+        <Text style={T.bodySm}>No hay registros en esos meses. El mes actual no cuenta porque no ha terminado.</Text>
       )}
-      <Text style={ms.mHint}>
-        {'\n'}Es un resumen hecho por ti con tus registros; no es un certificado de contador. Si el banco pide certificado, este resumen le sirve de soporte al contador.
+      <Text style={[ms.mHint, { marginTop: S.md }]}>
+        Es un resumen hecho por ti con tus registros; no es un certificado de contador. Si el banco pide certificado, este resumen le sirve de soporte al contador.
       </Text>
     </SheetFrame>
   );
 }
 
 const s = StyleSheet.create({
-  section:    { backgroundColor: '#1a1a1a', borderRadius: 18, padding: 16, marginBottom: 14 },
-  title:      { color: '#888', fontSize: 12, letterSpacing: 1, fontWeight: '600', marginBottom: 12 },
-  bigBtn:     { backgroundColor: '#222', borderRadius: 14, padding: 14, marginBottom: 10, borderWidth: 1, borderColor: '#333' },
-  bigBtnWarn: { backgroundColor: '#1a1500', borderColor: '#FFC107' },
-  bigTitle:   { color: '#fff', fontSize: 15, fontWeight: '700' },
-  bigSub:     { color: '#888', fontSize: 12, marginTop: 3 },
-  linkBtn:    { paddingVertical: 10, alignItems: 'center' },
-  linkTxt:    { color: '#888', fontSize: 13, textDecorationLine: 'underline' },
-  preview:    { backgroundColor: '#1e1e1e', borderRadius: 12, padding: 12 },
-  previewTxt: { color: '#aaa', fontSize: 13, lineHeight: 19 },
+  preview: { backgroundColor: C.surfaceHigh, borderRadius: R.md, padding: S.md, gap: S.xs },
 });

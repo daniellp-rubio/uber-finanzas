@@ -104,3 +104,21 @@ export function calcDailyGoal(
   const goal    = Math.round(pending / (workDaysLeftAfterToday + 1));
   return { goal, left: Math.max(goal - todayNet, 0), monthCovered: pending === 0 };
 }
+
+// ─── Lo del mecánico (para "Me queda" en Hoy) ─────────────────────────────────
+
+// Sin km del día se separa este porcentaje de lo ganado manejando (≈ $150/km sobre ≈ $1.500 de ingreso por km)
+export const MECHANIC_PCT = 10;
+
+export interface MechanicShare {
+  amount: number;
+  byKm:   boolean;   // true: km × costo por km del carro; false: porcentaje de lo de Uber
+}
+
+// Con km escritos: km × mantenimiento por km del carro. Sin km: MECHANIC_PCT % de lo ganado manejando.
+export function mechanicShare(driveIncome: number, km: number, maintCostPerKm: number): MechanicShare {
+  if (driveIncome <= 0) return { amount: 0, byKm: km > 0 };
+  return km > 0
+    ? { amount: Math.round(km * maintCostPerKm), byKm: true }
+    : { amount: Math.round(driveIncome * MECHANIC_PCT / 100), byKm: false };
+}
