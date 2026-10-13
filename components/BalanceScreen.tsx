@@ -1,14 +1,11 @@
 import React, { useCallback, useState } from 'react';
+import { View, Text, StyleSheet, ScrollView, Alert, Modal, TextInput, Pressable } from 'react-native';
 import {
-  View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  Alert, Modal, TextInput,
-} from 'react-native';
-import {
-  getFixedExpenses, getDebts, deleteFixedExpense, deleteDebt,
-  decrementDebtMonth, FixedExpense, Debt,
+  getFixedExpenses, getDebts, deleteFixedExpense, deleteDebt, decrementDebtMonth,
+  getTransactionsByDate, getSetting, setSetting, FixedExpense, Debt,
 } from '../src/db';
-import { computeBalance, BalanceResult, BalanceStatus } from '../src/financeCalc';
-import { formatCurrency } from '../src/format';
+import { computeBalance, calcDailyGoal, BalanceResult, BalanceStatus, DailyGoal } from '../src/financeCalc';
+import { formatCurrency, todayString } from '../src/format';
 import AddFixedExpenseModal from './AddFixedExpenseModal';
 import AddDebtModal from './AddDebtModal';
 import {
@@ -17,6 +14,8 @@ import {
 import DianSection from './DianSection';
 import MyDataSection from './MyDataSection';
 import { versionLabel } from '../src/updates';
+import { C, T, S, R } from '../src/theme';
+import { Button, Collapsible, Hint, Icon, IconButton, Pill, Section, SwitchMark, Tone } from './ui';
 
 // ─── Category icons for fixed expenses ───────────────────────────────────────
 const CAT_ICONS: Record<string, string> = {
@@ -24,46 +23,57 @@ const CAT_ICONS: Record<string, string> = {
   market: '🛒', transport: '🚌', health: '🏥', other: '📦',
 };
 
-// ─── Status config ────────────────────────────────────────────────────────────
-const STATUS_CONFIG: Record<BalanceStatus, { bg: string; label: string; emoji: string }> = {
-  none:    { bg: '#1e1e1e', label: 'Sin obligaciones configuradas', emoji: '⚙️' },
-  no_data: { bg: '#1a1a00', label: 'Sin datos este mes aún',        emoji: '📊' },
-  green:   { bg: '#0a2e1a', label: 'Vas bien',                      emoji: '🟢' },
-  yellow:  { bg: '#2a1f00', label: 'Cuídado, puedes mejorar',       emoji: '🟡' },
-  red:     { bg: '#2e0a0a', label: 'Estás en riesgo',               emoji: '🔴' },
+const MONTHS = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio',
+  'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
+
+// ─── Estado del mes ───────────────────────────────────────────────────────────
+const STATUS: Record<BalanceStatus, { label: string; tone: Tone }> = {
+  none:    { label: 'Sin gastos del mes anotados', tone: 'neutral' },
+  no_data: { label: 'Sin datos este mes aún',      tone: 'warn' },
+  green:   { label: 'Vas bien',                    tone: 'money' },
+  yellow:  { label: 'Cuidado, puedes mejorar',     tone: 'warn' },
+  red:     { label: 'Estás en riesgo',             tone: 'spend' },
+};
+const TONE_COLOR: Record<Tone, string> = {
+  neutral: C.textMuted, primary: C.primary, money: C.money, warn: C.warn, spend: C.spend,
 };
 
-const STATUS_TEXT_COLOR: Record<BalanceStatus, string> = {
-  none:    '#888',
-  no_data: '#FFC107',
-  green:   '#00C853',
-  yellow:  '#FFC107',
-  red:     '#F44336',
-};
+// Cuota de una deuda ya marcada como pagada este mes: setting "debt_paid_<id>" = "YYYY-MM"
+const paidKey = (id: number) => `debt_paid_${id}`;
 
-// ─── Component ────────────────────────────────────────────────────────────────
 export default function BalanceScreen() {
-  const [balance, setBalance]             = useState<BalanceResult | null>(null);
-  const [fixedExpenses, setFixed]         = useState<FixedExpense[]>([]);
-  const [debts, setDebts]                 = useState<Debt[]>([]);
-  const [showAddFixed, setShowAddFixed]   = useState(false);
-  const [showAddDebt, setShowAddDebt]     = useState(false);
-  const [showConfig, setShowConfig]       = useState(false);
-  const [cfg, setCfg]                     = useState<VehicleConfig>(getVehicleConfig());
+  const [balance, setBalance]           = useState<BalanceResult | null>(null);
+  const [goal, setGoal]                 = useState<DailyGoal | null>(null);
+  const [fixedExpenses, setFixed]       = useState<FixedExpense[]>([]);
+  const [debts, setDebts]               = useState<Debt[]>([]);
+  const [paidThisMonth, setPaid]        = useState<Set<number>>(new Set());
+  const [showAddFixed, setShowAddFixed] = useState(false);
+  const [showAddDebt, setShowAddDebt]   = useState(false);
+  const [cfg, setCfg]                   = useState<VehicleConfig>(getVehicleConfig());
 
   // Config Uber (editable). Gasolina, pico y placa y mantenimiento están en cada carro (tab Carros)
-  const [cfgComm, setCfgComm]             = useState(String(cfg.uberCommissionPct));
-  const [cfgPass, setCfgPass]             = useState(String(cfg.uberPassPriceCOP));
+  const [cfgComm, setCfgComm]           = useState(String(cfg.uberCommissionPct));
+  const [cfgPass, setCfgPass]           = useState(String(cfg.uberPassPriceCOP));
+
+  const today     = todayString();
+  const yearMonth = today.slice(0, 7);
+  const monthName = MONTHS[Number(today.slice(5, 7)) - 1];
 
   const load = useCallback(() => {
+    const b = computeBalance();
+    setBalance(b);
+    // La misma meta que muestra Hoy
+    const todayNet = getTransactionsByDate(today).reduce((s, t) => s + (t.type === 'income' ? t.amount : -t.amount), 0);
+    setGoal(b.status === 'none' ? null : calcDailyGoal(b.monthlyObligations, b.currentMonthNet, todayNet, b.workingDaysEstLeft));
     setFixed(getFixedExpenses());
-    setDebts(getDebts());
-    setBalance(computeBalance());
+    const ds = getDebts();
+    setDebts(ds);
+    setPaid(new Set(ds.filter(d => getSetting(paidKey(d.id), '') === yearMonth).map(d => d.id)));
     const updated = getVehicleConfig();
     setCfg(updated);
     setCfgComm(String(updated.uberCommissionPct));
     setCfgPass(String(updated.uberPassPriceCOP));
-  }, []);
+  }, [today, yearMonth]);
 
   React.useEffect(() => { load(); }, [load]);
 
@@ -71,247 +81,210 @@ export default function BalanceScreen() {
     // La comisión sí puede ser 0; el Uber Pass en 0 no tiene sentido
     const comm = Number(cfgComm);
     saveUberConfig({
-      uberCommissionPct:    cfgComm.trim() !== '' && Number.isFinite(comm) ? comm : cfg.uberCommissionPct,
-      uberPassPriceCOP:     Number(cfgPass) || cfg.uberPassPriceCOP,
+      uberCommissionPct: cfgComm.trim() !== '' && Number.isFinite(comm) ? comm : cfg.uberCommissionPct,
+      uberPassPriceCOP:  Number(cfgPass) || cfg.uberPassPriceCOP,
     });
     load();
-    setShowConfig(false);
+    Alert.alert('Guardado', 'Se guardó la configuración de Uber.');
   };
 
-  // Se guarda al tocar, sin pasar por "Guardar configuración"
+  // Se guarda al tocar, sin pasar por "Guardar"
   const toggleUberPass = () => {
     saveUberConfig({ uberPassActive: !cfg.uberPassActive });
     setCfg(getVehicleConfig());
   };
 
-  const handleDeleteFixed = (id: number, name: string) => {
-    Alert.alert(`Eliminar "${name}"`, '¿Quitar este gasto fijo?', [
+  const handleDeleteFixed = (exp: FixedExpense) =>
+    Alert.alert(`Borrar "${exp.name}"`, '¿Quitar este gasto fijo del mes?', [
       { text: 'Cancelar', style: 'cancel' },
-      { text: 'Eliminar', style: 'destructive', onPress: () => { deleteFixedExpense(id); load(); } },
+      { text: 'Borrar', style: 'destructive', onPress: () => { deleteFixedExpense(exp.id); load(); } },
     ]);
+
+  const confirmDeleteDebt = (debt: Debt) =>
+    Alert.alert(`Borrar "${debt.name}"`, 'Se quita la deuda del balance. ¿Seguro?', [
+      { text: 'Cancelar', style: 'cancel' },
+      { text: 'Borrar', style: 'destructive', onPress: () => { deleteDebt(debt.id); load(); } },
+    ]);
+
+  const markPaid = (debt: Debt) => {
+    decrementDebtMonth(debt.id, debt.months_remaining);
+    setSetting(paidKey(debt.id), yearMonth);
+    load();
   };
 
-  const handleDeleteDebt = (id: number, name: string) => {
-    Alert.alert(`Eliminar "${name}"`, '¿Quitar esta deuda?', [
-      { text: 'Cancelar', style: 'cancel' },
-      { text: 'Eliminar', style: 'destructive', onPress: () => { deleteDebt(id); load(); } },
-    ]);
-  };
-
-  const handleDecrementDebt = (debt: Debt) => {
-    if (debt.months_remaining === null) return;
-    Alert.alert(`Marcar cuota de "${debt.name}"`, 'Descontar 1 mes restante', [
-      { text: 'Cancelar', style: 'cancel' },
-      { text: 'Confirmar', onPress: () => { decrementDebtMonth(debt.id, debt.months_remaining); load(); } },
+  // Tocar una deuda: acciones a la vista, sin gestos escondidos
+  const handleDebt = (debt: Debt) => {
+    const paid = paidThisMonth.has(debt.id);
+    const detail = [
+      `${formatCurrency(debt.monthly_payment)} al mes`,
+      debt.months_remaining !== null
+        ? `${debt.months_remaining} ${debt.months_remaining === 1 ? 'cuota pendiente' : 'cuotas pendientes'}`
+        : 'Sin fecha de fin',
+      paid ? `La cuota de ${monthName} ya está marcada como pagada.` : null,
+    ].filter(Boolean).join('\n');
+    Alert.alert(debt.name, detail, [
+      ...(paid ? [] : [{ text: `Ya pagué ${monthName}`, onPress: () => markPaid(debt) }]),
+      { text: 'Borrar deuda', style: 'destructive' as const, onPress: () => confirmDeleteDebt(debt) },
+      { text: 'Cerrar', style: 'cancel' as const },
     ]);
   };
 
   const totalFixed = fixedExpenses.reduce((s, e) => s + e.amount, 0);
   const totalDebts = debts.reduce((s, d) => s + d.monthly_payment, 0);
 
-  const b = balance;
-  const statusCfg = b ? STATUS_CONFIG[b.status] : STATUS_CONFIG.none;
-  const textColor  = b ? STATUS_TEXT_COLOR[b.status] : '#888';
+  const b  = balance;
+  const st = STATUS[b?.status ?? 'none'];
+  const coveredPct = b ? Math.min(Math.max(b.coveredPct, 0), 1) : 0;
 
-  const today = new Date();
-  const monthName = today.toLocaleDateString('es-CO', { month: 'long', year: 'numeric' });
+  const pp = cfg.picoPlacaDaysPerWeek > 0
+    ? calcPicoPlacaImpact(b && b.daysWorked > 0 ? b.dailyAvg : 0, cfg) : null;
 
   return (
     <View style={s.container}>
       <View style={s.header}>
-        <Text style={s.title}>Balance mensual</Text>
-        <Text style={s.subtitle}>{monthName.charAt(0).toUpperCase() + monthName.slice(1)}</Text>
+        <Text style={T.headline} accessibilityRole="header">Balance</Text>
+        <Text style={T.bodySm}>{monthName.charAt(0).toUpperCase() + monthName.slice(1)} {today.slice(0, 4)}</Text>
       </View>
 
       <ScrollView contentContainerStyle={s.scroll}>
-
-        {/* ── Status Card ── */}
+        {/* ── Cómo va el mes ── */}
         {b && (
-          <View style={[s.statusCard, { backgroundColor: statusCfg.bg }]}>
-            <View style={s.statusTop}>
-              <Text style={s.statusEmoji}>{statusCfg.emoji}</Text>
-              <Text style={[s.statusLabel, { color: textColor }]}>{statusCfg.label}</Text>
-            </View>
-
-            {b.status !== 'none' && (
+          <View style={s.hero}>
+            <Pill text={st.label} tone={st.tone} />
+            {b.status === 'none' ? (
+              <Text style={[T.body, { marginTop: S.md }]}>
+                Anota abajo tus gastos fijos y deudas del mes y te digo cuánto necesitas hacer cada día.
+              </Text>
+            ) : (
               <>
                 {b.netIsNegative && (
-                  <View style={s.warningBanner}>
-                    <Text style={s.warningText}>❗ Los gastos superan los ingresos este mes</Text>
+                  <View style={s.inline}>
+                    <Icon name="alert-circle" size={20} color={C.spend} />
+                    <Text style={[T.label, { color: C.spend, flex: 1 }]}>Este mes llevas más gastos que ingresos</Text>
                   </View>
                 )}
+                <Text style={[T.label, { marginTop: S.md }]}>Meta de hoy</Text>
+                {goal && (goal.monthCovered || goal.left === 0) ? (
+                  <View style={s.inline}>
+                    <Icon name="check-circle" size={28} color={C.money} />
+                    <Text style={[T.headline, { color: C.money }]}>
+                      {goal.monthCovered ? 'Mes cubierto' : 'Cumplida'}
+                    </Text>
+                  </View>
+                ) : (
+                  <Text style={T.display}>{formatCurrency(goal?.goal ?? 0)}</Text>
+                )}
+                <Text style={T.bodySm}>La misma de Hoy: lo que falta del mes repartido en los días que quedan.</Text>
 
-                <View style={s.statsGrid}>
-                  <View style={s.statItem}>
-                    <Text style={s.statLabel}>Objetivo diario</Text>
-                    <Text style={[s.statVal, { color: '#fff' }]}>{formatCurrency(b.dailyTarget)}</Text>
-                  </View>
-                  <View style={s.statItem}>
-                    <Text style={s.statLabel}>Tu promedio</Text>
-                    <Text style={[s.statVal, { color: textColor }]}>
-                      {b.status === 'no_data' ? '—' : formatCurrency(b.dailyAvg)}
-                    </Text>
-                  </View>
-                  <View style={s.statItem}>
-                    <Text style={s.statLabel}>Necesitas hoy</Text>
-                    <Text style={[s.statVal, { color: '#FFC107' }]}>
-                      {formatCurrency(b.dailyNeededNow)}
-                    </Text>
-                  </View>
+                <View style={s.bar} accessibilityRole="progressbar" accessibilityValue={{ min: 0, max: 100, now: Math.round(coveredPct * 100) }}>
+                  <View style={[s.barFill, { width: `${Math.round(coveredPct * 100)}%`, backgroundColor: TONE_COLOR[st.tone] }]} />
                 </View>
+                <Text style={T.body}>
+                  Llevas <Text style={{ fontWeight: '700' }}>{formatCurrency(Math.max(b.currentMonthNet, 0))}</Text> de {formatCurrency(b.monthlyObligations)} ({Math.round(coveredPct * 100)} %)
+                </Text>
 
-                {/* Progress bar */}
-                {b.monthlyObligations > 0 && (
-                  <View style={s.progressSection}>
-                    <View style={s.progressBar}>
-                      <View
-                        style={[
-                          s.progressFill,
-                          {
-                            width: `${Math.min(Math.max(b.coveredPct, 0), 1) * 100}%` as any,
-                            backgroundColor: textColor,
-                          },
-                        ]}
-                      />
-                    </View>
-                    <Text style={s.progressText}>
-                      {Math.round(b.coveredPct * 100)}% cubierto
-                      {'  ·  '}
-                      {formatCurrency(Math.max(b.currentMonthNet, 0))} de {formatCurrency(b.monthlyObligations)}
-                    </Text>
-                    <Text style={s.daysText}>
-                      {b.daysWorked} días trabajados · {b.calendarDaysLeft} días calendario restantes
-                    </Text>
-                  </View>
-                )}
+                <View style={s.avgRow}>
+                  <Text style={[T.body, { flex: 1 }]}>Tu promedio por día</Text>
+                  <Text style={[T.amount, { color: TONE_COLOR[st.tone] }]}>
+                    {b.status === 'no_data' ? 'Sin datos' : formatCurrency(b.dailyAvg)}
+                  </Text>
+                </View>
+                <Text style={T.labelSm}>
+                  {b.daysWorked} {b.daysWorked === 1 ? 'día trabajado' : 'días trabajados'} · quedan {b.calendarDaysLeft} días del mes · vas bien con un promedio de {formatCurrency(b.dailyTarget)} o más
+                </Text>
               </>
-            )}
-
-            {b.status === 'none' && (
-              <Text style={s.noneHint}>
-                Configura tus gastos fijos y deudas abajo{'\n'}para ver tu objetivo diario.
-              </Text>
             )}
           </View>
         )}
 
         {/* ── Gastos fijos ── */}
-        <View style={s.section}>
-          <View style={s.sectionHeader}>
-            <Text style={s.sectionTitle}>GASTOS FIJOS</Text>
-            <Text style={s.sectionTotal}>{formatCurrency(totalFixed)}/mes</Text>
-          </View>
-
+        <Section title="Gastos fijos" right={<Text style={T.amount}>{formatCurrency(totalFixed)}<Text style={T.labelSm}> al mes</Text></Text>}>
           {fixedExpenses.length === 0 ? (
-            <Text style={s.emptyRow}>Sin gastos fijos aún</Text>
-          ) : (
-            fixedExpenses.map(exp => (
-              <TouchableOpacity
-                key={exp.id}
-                style={s.itemRow}
-                onLongPress={() => handleDeleteFixed(exp.id, exp.name)}
-                activeOpacity={0.7}
-              >
-                <Text style={s.itemIcon}>{CAT_ICONS[exp.category] ?? '📦'}</Text>
-                <Text style={s.itemName}>{exp.name}</Text>
-                <Text style={s.itemAmount}>{formatCurrency(exp.amount)}</Text>
-              </TouchableOpacity>
-            ))
-          )}
-
-          <TouchableOpacity style={s.addBtn} onPress={() => setShowAddFixed(true)}>
-            <Text style={s.addBtnTxt}>+ Agregar gasto fijo</Text>
-          </TouchableOpacity>
-          <Text style={s.longPressHint}>Mantén presionado para eliminar</Text>
-        </View>
+            <Text style={[T.bodySm, s.empty]}>Todavía no hay gastos fijos (arriendo, servicios, mercado…).</Text>
+          ) : fixedExpenses.map((exp, i) => (
+            <View key={exp.id} style={[s.row, i < fixedExpenses.length - 1 && s.divider]}>
+              <Text style={s.glyph}>{CAT_ICONS[exp.category] ?? '📦'}</Text>
+              <Text style={[T.body, { flex: 1 }]} numberOfLines={2}>{exp.name}</Text>
+              <Text style={T.amount}>{formatCurrency(exp.amount)}</Text>
+              <IconButton name="trash-can-outline" label={`Borrar ${exp.name}`} onPress={() => handleDeleteFixed(exp)} />
+            </View>
+          ))}
+          <Button label="Agregar gasto fijo" icon="plus" variant="tonal" tone="neutral" onPress={() => setShowAddFixed(true)} style={s.addBtn} />
+        </Section>
 
         {/* ── Deudas ── */}
-        <View style={s.section}>
-          <View style={s.sectionHeader}>
-            <Text style={s.sectionTitle}>DEUDAS</Text>
-            <Text style={s.sectionTotal}>{formatCurrency(totalDebts)}/mes</Text>
-          </View>
-
+        <Section title="Deudas" right={<Text style={T.amount}>{formatCurrency(totalDebts)}<Text style={T.labelSm}> al mes</Text></Text>}>
           {debts.length === 0 ? (
-            <Text style={s.emptyRow}>Sin deudas registradas</Text>
-          ) : (
-            debts.map(debt => (
-              <TouchableOpacity
+            <Text style={[T.bodySm, s.empty]}>Sin deudas anotadas.</Text>
+          ) : debts.map((debt, i) => {
+            const paid = paidThisMonth.has(debt.id);
+            return (
+              <Pressable
                 key={debt.id}
-                style={s.itemRow}
-                onLongPress={() => handleDeleteDebt(debt.id, debt.name)}
-                onPress={() => debt.months_remaining !== null && handleDecrementDebt(debt)}
-                activeOpacity={0.7}
+                style={({ pressed }) => [s.row, i < debts.length - 1 && s.divider, pressed && { opacity: 0.85 }]}
+                onPress={() => handleDebt(debt)}
+                accessibilityRole="button"
+                accessibilityHint="Marcar la cuota del mes como pagada o borrar la deuda"
               >
-                <Text style={s.itemIcon}>💳</Text>
-                <View style={s.debtInfo}>
-                  <Text style={s.itemName}>{debt.name}</Text>
-                  <Text style={s.debtMonths}>
+                <Text style={s.glyph}>💳</Text>
+                <View style={{ flex: 1, gap: 2 }}>
+                  <Text style={T.body} numberOfLines={2}>{debt.name}</Text>
+                  <Text style={T.labelSm}>
                     {debt.months_remaining !== null
-                      ? `${debt.months_remaining} ${debt.months_remaining === 1 ? 'mes' : 'meses'} restantes`
-                      : 'Cuota indefinida'}
+                      ? `${debt.months_remaining} ${debt.months_remaining === 1 ? 'cuota pendiente' : 'cuotas pendientes'}`
+                      : 'Sin fecha de fin'}
                   </Text>
+                  {paid && <Pill text={`Pagada en ${monthName}`} tone="money" />}
                 </View>
-                <Text style={s.itemAmount}>{formatCurrency(debt.monthly_payment)}/mes</Text>
-              </TouchableOpacity>
-            ))
-          )}
-
-          <TouchableOpacity style={[s.addBtn, s.addBtnRed]} onPress={() => setShowAddDebt(true)}>
-            <Text style={s.addBtnTxt}>+ Agregar deuda</Text>
-          </TouchableOpacity>
-          <Text style={s.longPressHint}>Presiona para descontar 1 mes · Mantén para eliminar</Text>
-        </View>
+                <Text style={T.amount}>{formatCurrency(debt.monthly_payment)}</Text>
+                <Icon name="chevron-right" size={22} color={C.textFaint} />
+              </Pressable>
+            );
+          })}
+          <Button label="Agregar deuda" icon="plus" variant="tonal" tone="neutral" onPress={() => setShowAddDebt(true)} style={s.addBtn} />
+          {debts.length > 0 && <Hint>Toca una deuda cuando pagues la cuota del mes.</Hint>}
+        </Section>
 
         {/* ── Total ── */}
         {(fixedExpenses.length > 0 || debts.length > 0) && (
-          <View style={s.totalBox}>
-            <Text style={s.totalLabel}>TOTAL OBLIGACIONES MENSUALES</Text>
-            <Text style={s.totalAmount}>{formatCurrency(totalFixed + totalDebts)}</Text>
-            <Text style={s.totalSub}>
-              Gastos fijos: {formatCurrency(totalFixed)}{'  +  '}
-              Deudas: {formatCurrency(totalDebts)}
-            </Text>
-          </View>
+          <Section>
+            <View style={s.totalRow}>
+              <Text style={T.titleSm}>Total del mes</Text>
+              <Text style={T.headline}>{formatCurrency(totalFixed + totalDebts)}</Text>
+            </View>
+            <Text style={T.labelSm}>Gastos fijos {formatCurrency(totalFixed)} + deudas {formatCurrency(totalDebts)}</Text>
+          </Section>
         )}
 
-        {/* ── Pico y Placa ── */}
-        {(() => {
-          if (cfg.picoPlacaDaysPerWeek === 0) {
-            return (
-              <View style={s.section}>
-                <Text style={s.sectionTitle}>🚫 PICO Y PLACA</Text>
-                <Text style={[s.ppDays, { color: '#00C853', marginTop: 10, marginBottom: 0 }]}>
-                  ✓ {cfg.vehicleName} no tiene pico y placa: puedes trabajar todos los días.
-                </Text>
+        {/* ── Pico y placa ── */}
+        <Section title="Pico y placa">
+          {!pp ? (
+            <View style={s.inline}>
+              <Icon name="check-circle" size={20} color={C.money} />
+              <Text style={[T.body, { flex: 1 }]}>{cfg.vehicleName} no tiene pico y placa: puedes trabajar todos los días.</Text>
+            </View>
+          ) : (
+            <>
+              <View style={s.stats}>
+                <View style={s.stat}>
+                  <Text style={T.labelSm}>Días sin trabajar este mes</Text>
+                  <Text style={T.title}>{pp.daysBlockedThisMonth}</Text>
+                </View>
+                <View style={s.stat}>
+                  <Text style={T.labelSm}>Días disponibles</Text>
+                  <Text style={T.title}>{pp.workedDaysAvailable}</Text>
+                </View>
               </View>
-            );
-          }
-          const avgDaily = b && b.daysWorked > 0 ? b.dailyAvg : 0;
-          const pp = calcPicoPlacaImpact(avgDaily, cfg);
-          return (
-            <View style={s.section}>
-              <View style={s.sectionHeader}>
-                <Text style={s.sectionTitle}>🚫 PICO Y PLACA</Text>
-              </View>
-              <Text style={s.ppDays}>
-                Días sin trabajar este mes: <Text style={s.ppDaysNum}>{pp.daysBlockedThisMonth}</Text>
-              </Text>
-              <Text style={s.ppDays}>
-                Días disponibles: <Text style={{ color: '#00C853', fontWeight: '700' }}>{pp.workedDaysAvailable}</Text>
-              </Text>
-              {avgDaily > 0 && (
-                <View style={s.ppLoss}>
-                  <Text style={s.ppLossLabel}>Ingreso perdido estimado</Text>
-                  <Text style={s.ppLossAmt}>{formatCurrency(pp.estimatedLostIncome)}</Text>
+              {b && b.daysWorked > 0 && (
+                <View style={[s.totalRow, { marginTop: S.md }]}>
+                  <Text style={T.body}>Ingreso que dejas de hacer</Text>
+                  <Text style={[T.amount, { color: C.spend }]}>{formatCurrency(pp.estimatedLostIncome)}</Text>
                 </View>
               )}
-              <Text style={s.ppHint}>
-                {cfg.vehicleName}: {cfg.picoPlacaDaysPerWeek} {cfg.picoPlacaDaysPerWeek === 1 ? 'día' : 'días'}/semana sin trabajar. Se cambia en 🚙 Carros.
-              </Text>
-            </View>
-          );
-        })()}
+              <Hint>{cfg.vehicleName}: {cfg.picoPlacaDaysPerWeek} {cfg.picoPlacaDaysPerWeek === 1 ? 'día' : 'días'} por semana. Se cambia en Carros.</Hint>
+            </>
+          )}
+        </Section>
 
         {/* ── Estimador de renta ── */}
         <DianSection />
@@ -319,58 +292,39 @@ export default function BalanceScreen() {
         {/* ── Copia de seguridad y resumen de ingresos ── */}
         <MyDataSection onRestored={load} />
 
-        {/* ── Config vehículo ── */}
-        <TouchableOpacity style={s.configBtn} onPress={() => setShowConfig(v => !v)}>
-          <Text style={s.configBtnTxt}>⚙️ Configurar Uber</Text>
-          <Text style={s.chevron}>{showConfig ? '▲' : '▼'}</Text>
-        </TouchableOpacity>
+        {/* ── Configuración de Uber ── */}
+        <Collapsible title="Configurar Uber" summary={cfg.uberPassActive ? `Con Uber Pass de ${formatCurrency(cfg.uberPassPriceCOP)}` : `Comisión del ${cfg.uberCommissionPct} %`}>
+          <Pressable
+            style={[s.passToggle, cfg.uberPassActive && s.passToggleOn]}
+            onPress={toggleUberPass}
+            accessibilityRole="switch"
+            accessibilityState={{ checked: cfg.uberPassActive }}
+          >
+            <View style={{ flex: 1 }}>
+              <Text style={T.titleSm}>Tengo Uber Pass</Text>
+              <Text style={T.labelSm}>
+                {cfg.uberPassActive ? 'Uber no te cobra comisión por viaje.' : 'Uber te cobra comisión por viaje.'}
+              </Text>
+            </View>
+            <SwitchMark on={cfg.uberPassActive} />
+          </Pressable>
+          <Text style={[T.label, { marginTop: S.lg }]}>
+            {cfg.uberPassActive ? 'Valor de cada Uber Pass (pesos)' : 'Comisión de Uber (%)'}
+          </Text>
+          <TextInput
+            style={s.input}
+            value={cfg.uberPassActive ? cfgPass : cfgComm}
+            onChangeText={cfg.uberPassActive ? setCfgPass : setCfgComm}
+            keyboardType="number-pad"
+            accessibilityLabel={cfg.uberPassActive ? 'Valor de cada Uber Pass' : 'Comisión de Uber'}
+          />
+          <Button label="Guardar" onPress={saveConfig} style={{ marginTop: S.md }} />
+          <Hint>Gasolina o carga, pico y placa y mantenimiento son de cada carro: Carros → {cfg.vehicleName} → Datos del carro.</Hint>
+        </Collapsible>
 
-        {showConfig && (
-          <View style={s.configBox}>
-            <TouchableOpacity
-              style={[s.passToggle, cfg.uberPassActive && s.passToggleOn]}
-              onPress={toggleUberPass}
-              activeOpacity={0.8}
-            >
-              <Text style={s.passIcon}>🎫</Text>
-              <View style={s.passText}>
-                <Text style={[s.passTitle, cfg.uberPassActive && s.passTitleOn]}>Tengo Uber Pass</Text>
-                <Text style={s.passSub}>
-                  {cfg.uberPassActive
-                    ? 'Uber no te cobra comisión. Toca para volver a la comisión.'
-                    : 'Uber te cobra comisión por viaje. Toca si pagas Uber Pass.'}
-                </Text>
-              </View>
-              <View style={[s.passDot, cfg.uberPassActive && s.passDotOn]} />
-            </TouchableOpacity>
-            {[
-              cfg.uberPassActive
-                ? { label: 'Valor de cada Uber Pass (COP)', val: cfgPass, set: setCfgPass }
-                : { label: 'Comisión Uber (%)',            val: cfgComm, set: setCfgComm },
-            ].map(row => (
-              <View key={row.label} style={s.cfgRow}>
-                <Text style={s.cfgLabel}>{row.label}</Text>
-                <TextInput
-                  style={s.cfgInput}
-                  value={row.val}
-                  onChangeText={row.set}
-                  keyboardType="number-pad"
-                />
-              </View>
-            ))}
-            <TouchableOpacity style={s.cfgSaveBtn} onPress={saveConfig}>
-              <Text style={s.cfgSaveTxt}>GUARDAR CONFIGURACIÓN</Text>
-            </TouchableOpacity>
-            <Text style={s.cfgHint}>
-              Gasolina o carga, pico y placa y mantenimiento son de cada carro: 🚙 Carros → {cfg.vehicleName} → Editar datos.
-            </Text>
-          </View>
-        )}
-
-        <Text style={s.versionTxt}>{versionLabel()}</Text>
+        <Text style={s.version}>{versionLabel()}</Text>
       </ScrollView>
 
-      {/* ── Add Fixed Expense Modal ── */}
       <Modal visible={showAddFixed} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setShowAddFixed(false)}>
         <AddFixedExpenseModal
           onClose={() => setShowAddFixed(false)}
@@ -378,7 +332,6 @@ export default function BalanceScreen() {
         />
       </Modal>
 
-      {/* ── Add Debt Modal ── */}
       <Modal visible={showAddDebt} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setShowAddDebt(false)}>
         <AddDebtModal
           onClose={() => setShowAddDebt(false)}
@@ -390,80 +343,24 @@ export default function BalanceScreen() {
 }
 
 const s = StyleSheet.create({
-  container:     { flex: 1, backgroundColor: '#121212' },
-  header:        { paddingHorizontal: 20, paddingTop: 16, paddingBottom: 8 },
-  title:         { color: '#fff', fontSize: 28, fontWeight: '800' },
-  subtitle:      { color: '#666', fontSize: 14, marginTop: 2 },
-  scroll:        { padding: 16, paddingBottom: 40 },
-
-  statusCard:    { borderRadius: 20, padding: 20, marginBottom: 20 },
-  statusTop:     { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 16 },
-  statusEmoji:   { fontSize: 24 },
-  statusLabel:   { fontSize: 18, fontWeight: '700', flex: 1 },
-  warningBanner: { backgroundColor: '#3d0000', borderRadius: 10, padding: 10, marginBottom: 14 },
-  warningText:   { color: '#F44336', fontSize: 13, fontWeight: '600' },
-  statsGrid:     { flexDirection: 'row', gap: 8, marginBottom: 16 },
-  statItem:      { flex: 1, alignItems: 'center' },
-  statLabel:     { color: '#888', fontSize: 11, marginBottom: 6 },
-  statVal:       { fontSize: 15, fontWeight: '700' },
-  progressSection: { gap: 6 },
-  progressBar:   { height: 8, backgroundColor: '#ffffff20', borderRadius: 4, overflow: 'hidden' },
-  progressFill:  { height: '100%', borderRadius: 4 },
-  progressText:  { color: '#aaa', fontSize: 12 },
-  daysText:      { color: '#666', fontSize: 11 },
-  noneHint:      { color: '#666', fontSize: 14, textAlign: 'center', lineHeight: 22 },
-
-  section:       { backgroundColor: '#1a1a1a', borderRadius: 18, padding: 16, marginBottom: 14 },
-  sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
-  sectionTitle:  { color: '#888', fontSize: 12, letterSpacing: 1, fontWeight: '600' },
-  sectionTotal:  { color: '#00C853', fontSize: 14, fontWeight: '700' },
-  emptyRow:      { color: '#444', fontSize: 14, marginBottom: 12, paddingLeft: 4 },
-  itemRow:       { flexDirection: 'row', alignItems: 'center', paddingVertical: 12, gap: 12, borderBottomColor: '#262626', borderBottomWidth: 1 },
-  itemIcon:      { fontSize: 22 },
-  itemName:      { flex: 1, color: '#fff', fontSize: 16 },
-  itemAmount:    { color: '#aaa', fontSize: 15, fontWeight: '600' },
-  debtInfo:      { flex: 1 },
-  debtMonths:    { color: '#666', fontSize: 12, marginTop: 2 },
-
-  addBtn:        { marginTop: 14, borderRadius: 12, borderWidth: 1.5, borderColor: '#00C853', borderStyle: 'dashed', paddingVertical: 12, alignItems: 'center' },
-  addBtnRed:     { borderColor: '#F44336' },
-  addBtnTxt:     { color: '#aaa', fontSize: 15, fontWeight: '600' },
-  longPressHint: { color: '#444', fontSize: 11, textAlign: 'center', marginTop: 8 },
-
-  totalBox:      { backgroundColor: '#1a1a1a', borderRadius: 18, padding: 20, alignItems: 'center', marginBottom: 14 },
-  totalLabel:    { color: '#666', fontSize: 12, letterSpacing: 1, marginBottom: 10 },
-  totalAmount:   { color: '#fff', fontSize: 32, fontWeight: '800', marginBottom: 6 },
-  totalSub:      { color: '#666', fontSize: 12 },
-  chevron:       { color: '#888', fontSize: 12 },
-
-  // Pico y placa
-  ppDays:        { color: '#aaa', fontSize: 14, marginBottom: 6 },
-  ppDaysNum:     { color: '#F44336', fontWeight: '700' },
-  ppLoss:        { backgroundColor: '#2e0a0a', borderRadius: 12, padding: 12, marginVertical: 8, alignItems: 'center' },
-  ppLossLabel:   { color: '#aaa', fontSize: 12, marginBottom: 4 },
-  ppLossAmt:     { color: '#F44336', fontSize: 20, fontWeight: '800' },
-  ppHint:        { color: '#555', fontSize: 11, marginTop: 6 },
-
-  // DIAN
-
-  // Config
-  configBtn:     { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#1a1a1a', borderRadius: 18, padding: 16, marginBottom: 10 },
-  configBtnTxt:  { color: '#888', fontSize: 14, fontWeight: '600' },
-  configBox:     { backgroundColor: '#1a1a1a', borderRadius: 18, padding: 16, marginBottom: 14 },
-  passToggle:    { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: '#222', borderRadius: 14, padding: 14, marginBottom: 16, borderWidth: 1.5, borderColor: 'transparent' },
-  passToggleOn:  { borderColor: '#00C853', backgroundColor: '#0a2e1a' },
-  passIcon:      { fontSize: 22 },
-  passText:      { flex: 1 },
-  passTitle:     { color: '#888', fontSize: 15, fontWeight: '700' },
-  passTitleOn:   { color: '#00C853' },
-  passSub:       { color: '#666', fontSize: 11, marginTop: 2, lineHeight: 16 },
-  passDot:       { width: 18, height: 18, borderRadius: 9, backgroundColor: '#333', borderWidth: 2, borderColor: '#555' },
-  passDotOn:     { backgroundColor: '#00C853', borderColor: '#00C853' },
-  cfgRow:        { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 },
-  cfgLabel:      { color: '#aaa', fontSize: 13, flex: 1 },
-  cfgInput:      { backgroundColor: '#262626', borderRadius: 10, padding: 10, color: '#fff', fontSize: 16, fontWeight: '700', width: 100, textAlign: 'center' },
-  cfgSaveBtn:    { backgroundColor: '#00C853', borderRadius: 14, height: 48, alignItems: 'center', justifyContent: 'center', marginTop: 4 },
-  cfgSaveTxt:    { color: '#fff', fontSize: 14, fontWeight: '800' },
-  cfgHint:       { color: '#666', fontSize: 12, lineHeight: 18, marginTop: 12 },
-  versionTxt:    { color: '#444', fontSize: 11, textAlign: 'center', marginTop: 12 },
+  container: { flex: 1, backgroundColor: C.bg },
+  header:    { paddingHorizontal: S.lg, paddingTop: S.lg, paddingBottom: S.sm },
+  scroll:    { paddingHorizontal: S.lg, paddingBottom: S.xl },
+  hero:      { backgroundColor: C.surface, borderRadius: R.lg, padding: S.lg, marginBottom: S.md },
+  inline:    { flexDirection: 'row', alignItems: 'center', gap: S.sm, marginTop: S.sm },
+  bar:       { height: 10, backgroundColor: C.surfaceHigh, borderRadius: R.pill, marginTop: S.lg, marginBottom: S.sm, overflow: 'hidden' },
+  barFill:   { height: 10, borderRadius: R.pill },
+  stats:     { flexDirection: 'row', gap: S.md, marginTop: S.md },
+  stat:      { flex: 1, backgroundColor: C.surfaceHigh, borderRadius: R.md, padding: S.md, gap: 2 },
+  avgRow:    { flexDirection: 'row', alignItems: 'center', minHeight: 40, marginTop: S.md, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: C.outline },
+  row:       { flexDirection: 'row', alignItems: 'center', gap: S.md, minHeight: 60, paddingVertical: S.xs },
+  divider:   { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: C.outline },
+  glyph:     { fontSize: 22, width: 28, textAlign: 'center' },
+  empty:     { paddingVertical: S.sm },
+  addBtn:    { marginTop: S.md, alignSelf: 'flex-start' },
+  totalRow:  { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  passToggle:{ flexDirection: 'row', alignItems: 'center', gap: S.md, backgroundColor: C.surfaceHigh, borderRadius: R.md, padding: S.md, minHeight: 64 },
+  passToggleOn: { backgroundColor: C.primaryContainer },
+  input:     { ...T.title, backgroundColor: C.surfaceHigh, borderRadius: R.md, paddingHorizontal: S.lg, minHeight: 56, marginTop: S.sm },
+  version:   { ...T.labelSm, color: C.textFaint, textAlign: 'center', marginTop: S.lg },
 });

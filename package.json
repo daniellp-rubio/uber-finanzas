@@ -12,10 +12,12 @@
     "build:apk": "eas build --platform android --profile preview --non-interactive"
   },
   "dependencies": {
+    "@expo/vector-icons": "~15.1.1",
     "expo": "~54.0.37",
     "expo-application": "~7.0.8",
     "expo-document-picker": "~14.0.8",
     "expo-file-system": "~19.0.24",
+    "expo-font": "~14.0.12",
     "expo-notifications": "~0.32.17",
     "expo-print": "~15.0.8",
     "expo-sharing": "~14.0.8",

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, TextInput, Alert, Modal, Linking } from 'react-native';
+import { View, Text, StyleSheet, TextInput, Alert, Modal, Linking } from 'react-native';
 import {
   addRental, updateRental, deleteRental, endRental, addRentalPayment, deleteRentalPayment,
   Vehicle, Rental, RentalInput, RentalPayment,
@@ -12,8 +12,11 @@ import { addDays, formatCurrency, formatDate, formatLongDate, formatKm, todayStr
 import { requestNotificationPermission } from '../src/notifications';
 import DateField from './DateField';
 import SheetFrame, { ms } from './SheetFrame';
+import { C, T, S, R } from '../src/theme';
+import { Amount, Button, Chip, Collapsible, Icon, IconButton, Row, Section, Tone } from './ui';
 
-const LEVEL_COLOR = { red: '#F44336', yellow: '#FFC107', ok: '#00C853', unknown: '#666' };
+const LEVEL_TONE: Record<string, Tone> = { red: 'spend', yellow: 'warn', ok: 'money', unknown: 'neutral' };
+const LEVEL_COLOR: Record<string, string> = { red: C.spend, yellow: C.warn, ok: C.money, unknown: C.textMuted };
 
 // Lunes primero, como en el calendario de Colombia (índices de Date.getDay)
 const WEEK_CHIPS = [[1, 'Lun'], [2, 'Mar'], [3, 'Mié'], [4, 'Jue'], [5, 'Vie'], [6, 'Sáb'], [0, 'Dom']] as const;
@@ -89,13 +92,17 @@ export default function RentalSection({ vehicle, rental, payments, isActive, onC
 
   if (!rental) {
     return (
-      <>
-        <TouchableOpacity style={rs.startBtn} onPress={handleStart} activeOpacity={0.8}>
-          <Text style={rs.startTxt}>🔑 Arrendar este carro</Text>
-          <Text style={rs.startSub}>Lleva la cuenta de las cuotas semanales, la mora, el depósito y los km</Text>
-        </TouchableOpacity>
+      <Section>
+        <Row
+          icon="key-variant"
+          tone="primary"
+          title="Arrendar este carro"
+          subtitle="Lleva la cuenta de las cuotas, el depósito y los km"
+          onPress={handleStart}
+          last
+        />
         {formModal}
-      </>
+      </Section>
     );
   }
 
@@ -106,97 +113,91 @@ export default function RentalSection({ vehicle, rental, payments, isActive, onC
   const depMiss   = Math.max(rental.deposit - st.depositPaid, 0);
 
   const handleDeletePayment = (p: RentalPayment) =>
-    Alert.alert('Eliminar pago', p.transaction_id !== null
-      ? `¿Eliminar el pago de ${formatCurrency(p.amount)}? También se borra el ingreso 🔑 de ese día.`
+    Alert.alert('Borrar pago', p.transaction_id !== null
+      ? `¿Borrar el pago de ${formatCurrency(p.amount)}? También se borra el ingreso 🔑 de ese día.`
       : p.kind === 'credit'
-        ? `¿Eliminar los días sin cobrar (${formatCurrency(p.amount)})? Vuelve a deberlos.`
-        : `¿Eliminar el abono de ${formatCurrency(p.amount)} al depósito?`, [
+        ? `¿Borrar los días sin cobrar (${formatCurrency(p.amount)})? Vuelve a deberlos.`
+        : `¿Borrar el abono de ${formatCurrency(p.amount)} al depósito?`, [
       { text: 'Cancelar', style: 'cancel' },
-      { text: 'Eliminar', style: 'destructive', onPress: () => { deleteRentalPayment(p); onChanged(); } },
+      { text: 'Borrar', style: 'destructive', onPress: () => { deleteRentalPayment(p); onChanged(); } },
     ]);
 
   return (
-    <View style={rs.section}>
-      <Text style={rs.sectionTitle}>ARRIENDO</Text>
-
-      <View style={rs.driverRow}>
-        <Text style={rs.driver} numberOfLines={1}>🔑 {rental.driver_name}</Text>
-        {rental.driver_phone && (
-          <TouchableOpacity onPress={() => Linking.openURL(`tel:${rental.driver_phone}`)}>
-            <Text style={rs.phone}>📞 {rental.driver_phone}</Text>
-          </TouchableOpacity>
-        )}
-      </View>
-      <Text style={rs.terms}>
+    <Collapsible
+      title={`Arriendo · ${rental.driver_name}`}
+      summary={describeRent(st)}
+      summaryTone={LEVEL_TONE[st.level]}
+      initiallyOpen
+    >
+      <Text style={T.bodySm}>
         {formatCurrency(rental.weekly_fee)} por semana{rental.in_arrears ? ' vencida' : ''} · paga los {payDayName(firstPayDate(rental))} · desde el {formatDate(rental.start_date)}
       </Text>
+      {rental.driver_phone && (
+        <Button
+          label={`Llamar al ${rental.driver_phone}`}
+          icon="phone"
+          variant="text"
+          onPress={() => Linking.openURL(`tel:${rental.driver_phone}`)}
+          style={{ alignSelf: 'flex-start', paddingHorizontal: 0 }}
+        />
+      )}
 
       {/* ── Estado de pagos ── */}
       <View style={[rs.statusBox, { borderColor: LEVEL_COLOR[st.level] }]}>
-        <Text style={[rs.statusTxt, { color: LEVEL_COLOR[st.level] }]}>{describeRent(st)}</Text>
+        <Text style={[T.titleSm, { color: LEVEL_COLOR[st.level] }]}>{describeRent(st)}</Text>
         {st.level === 'ok' && st.nextDue && (
-          <Text style={rs.statusSub}>Próximo pago: {formatLongDate(st.nextDue)}</Text>
+          <Text style={T.bodySm}>Próximo pago: {formatLongDate(st.nextDue)}</Text>
         )}
         {st.lateFee > 0 && (
-          <Text style={rs.statusSub}>
+          <Text style={T.bodySm}>
             Mora según el contrato: {formatCurrency(st.lateFee)} ({formatCurrency(rental.late_fee_per_day)} por día después de la gracia, máximo {MAX_LATE_DAYS} días por cuota)
           </Text>
         )}
         {st.canRecover && (
-          <Text style={[rs.statusSub, { color: '#F44336' }]}>
+          <Text style={[T.label, { color: C.spend }]}>
             Lleva {st.daysLate} días de atraso: según el contrato ya puedes recoger el carro.
           </Text>
         )}
       </View>
 
-      <Text style={rs.line}>
-        🔒 Depósito: {formatCurrency(st.depositPaid)} de {formatCurrency(rental.deposit)}
-        {depMiss > 0 ? <Text style={rs.warn}> · falta {formatCurrency(depMiss)}</Text> : ' ✓'}
-      </Text>
-      {km && (
-        <Text style={rs.line}>
-          📍 Lleva {formatKm(km.driven)} km de {formatKm(km.allowed)} incluidos
-          {km.excess > 0
-            ? <Text style={rs.bad}> · se pasó {formatKm(km.excess)} km = {formatCurrency(km.charge)}</Text>
-            : ' ✓'}
-        </Text>
-      )}
-      {!km && rental.km_per_week !== null && (
-        <Text style={rs.lineDim}>📍 Actualiza el kilometraje para ver si se pasó de los km incluidos</Text>
-      )}
-      <Text style={rs.line}>💵 Este mes llevas cobrado {formatCurrency(collected)}</Text>
+      <View style={rs.facts}>
+        <Fact icon="lock-outline" text={`Depósito: ${formatCurrency(st.depositPaid)} de ${formatCurrency(rental.deposit)}`}
+          extra={depMiss > 0 ? `falta ${formatCurrency(depMiss)}` : undefined} extraTone="warn" ok={depMiss === 0} />
+        {km && (
+          <Fact icon="map-marker-distance" text={`Lleva ${formatKm(km.driven)} km de ${formatKm(km.allowed)} incluidos`}
+            extra={km.excess > 0 ? `se pasó ${formatKm(km.excess)} km = ${formatCurrency(km.charge)}` : undefined} extraTone="spend" ok={km.excess === 0} />
+        )}
+        {!km && rental.km_per_week !== null && (
+          <Fact icon="map-marker-distance" text="Actualiza el kilometraje para ver si se pasó de los km incluidos" />
+        )}
+        <Fact icon="cash-multiple" text={`Este mes llevas cobrado ${formatCurrency(collected)}`} />
+      </View>
 
-      <TouchableOpacity style={rs.payBtn} onPress={() => setShowPay(true)}>
-        <Text style={rs.payTxt}>💵 Registrar pago</Text>
-      </TouchableOpacity>
+      <Button label="Registrar pago" icon="cash-plus" tone="money" big onPress={() => setShowPay(true)} style={{ marginTop: S.md }} />
 
       {/* ── Pagos ── */}
       {payments.length > 0 && (
         <>
-          <Text style={[rs.sectionTitle, { marginTop: 16 }]}>PAGOS</Text>
-          {payments.map(p => (
-            <TouchableOpacity key={p.id} style={rs.payRow} onLongPress={() => handleDeletePayment(p)} activeOpacity={0.7}>
-              <Text style={rs.payIcon}>{paymentIcon(p.kind)}</Text>
+          <Text style={[T.titleSm, { marginTop: S.lg }]}>Pagos</Text>
+          {payments.map((p, i) => (
+            <View key={p.id} style={[rs.payRow, i < payments.length - 1 && rs.divider]}>
+              <Text style={rs.glyph}>{paymentIcon(p.kind)}</Text>
               <View style={{ flex: 1 }}>
-                <Text style={rs.payTitle}>{paymentLabel(p.kind)}</Text>
-                <Text style={rs.paySub}>{formatDate(p.date)}{p.note ? ` · ${p.note}` : ''}</Text>
+                <Text style={T.body}>{paymentLabel(p.kind)}</Text>
+                <Text style={T.labelSm}>{formatDate(p.date)}{p.note ? ` · ${p.note}` : ''}</Text>
               </View>
-              <Text style={[rs.payAmt, (p.kind === 'deposit' || p.kind === 'credit') && { color: '#aaa' }]}>
-                {p.kind === 'credit' ? '' : '+'}{formatCurrency(p.amount)}
-              </Text>
-            </TouchableOpacity>
+              {p.kind === 'rent' || p.kind === 'fee'
+                ? <Amount value={p.amount} kind="in" />
+                : <Text style={[T.amount, { color: C.textMuted }]}>{formatCurrency(p.amount)}</Text>}
+              <IconButton name="trash-can-outline" label={`Borrar ${paymentLabel(p.kind)}`} onPress={() => handleDeletePayment(p)} />
+            </View>
           ))}
-          <Text style={rs.hint}>Mantén presionado para eliminar</Text>
         </>
       )}
 
       <View style={rs.btnRow}>
-        <TouchableOpacity style={rs.smallBtn} onPress={() => setForm('edit')}>
-          <Text style={rs.smallBtnTxt}>Editar contrato</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={rs.smallBtn} onPress={() => setShowEnd(true)}>
-          <Text style={rs.smallBtnTxt}>Me devolvió el carro</Text>
-        </TouchableOpacity>
+        <Button label="Me devolvió el carro" icon="car-arrow-left" variant="outlined" tone="neutral" onPress={() => setShowEnd(true)} />
+        <Button label="Editar contrato" icon="pencil-outline" variant="outlined" tone="neutral" onPress={() => setForm('edit')} />
       </View>
 
       {formModal}
@@ -224,6 +225,22 @@ export default function RentalSection({ vehicle, rental, payments, isActive, onC
           />
         )}
       </Modal>
+    </Collapsible>
+  );
+}
+
+// Una línea de dato con ícono; `ok` agrega un check verde y `extra` una nota de color
+function Fact({ icon, text, extra, extraTone, ok }: {
+  icon: React.ComponentProps<typeof Icon>['name']; text: string; extra?: string; extraTone?: 'warn' | 'spend'; ok?: boolean;
+}) {
+  return (
+    <View style={rs.fact}>
+      <Icon name={icon} size={20} color={C.textMuted} />
+      <Text style={[T.bodySm, { color: C.text, flex: 1 }]}>
+        {text}
+        {extra ? <Text style={{ color: extraTone === 'spend' ? C.spend : C.warn, fontWeight: '700' }}> · {extra}</Text> : null}
+      </Text>
+      {ok && !extra ? <Icon name="check-circle" size={18} color={C.money} /> : null}
     </View>
   );
 }
@@ -311,70 +328,59 @@ function RentalFormModal({ vehicle, rental, canDelete, onClose, onSaved }: {
         </View>
       )}
 
-      <Text style={ms.mLabel}>CONDUCTOR</Text>
-      <TextInput style={rs.textInput} value={name} onChangeText={setName} placeholder="Nombre completo" placeholderTextColor="#444" />
-      <TextInput style={rs.textInput} value={phone} onChangeText={setPhone} keyboardType="phone-pad" placeholder="Celular (opcional)" placeholderTextColor="#444" />
+      <Text style={ms.mLabel}>Conductor</Text>
+      <TextInput style={ms.mInput} value={name} onChangeText={setName} placeholder="Nombre completo" placeholderTextColor={C.textFaint} />
+      <TextInput style={ms.mInput} value={phone} onChangeText={setPhone} keyboardType="phone-pad" placeholder="Celular (opcional)" placeholderTextColor={C.textFaint} />
 
-      <Text style={ms.mLabel}>CUOTA POR SEMANA</Text>
-      <TextInput style={ms.mInput} value={showNum(fee)} onChangeText={t => setFee(digits(t))} keyboardType="number-pad" placeholder="$ 0" placeholderTextColor="#444" />
+      <Text style={ms.mLabel}>Cuota por semana</Text>
+      <TextInput style={ms.mInput} value={showNum(fee)} onChangeText={t => setFee(digits(t))} keyboardType="number-pad" placeholder="$ 0" placeholderTextColor={C.textFaint} />
       <Text style={ms.mHint}>Recomendado: {formatCurrency(d.weeklyFee)}. Más caro, el conductor no alcanza a pagar y se atrasa.</Text>
 
-      <Text style={ms.mLabel}>FECHA DE ENTREGA</Text>
+      <Text style={ms.mLabel}>Fecha de entrega</Text>
       <DateField value={start} onChange={setStart} />
 
-      <Text style={ms.mLabel}>DÍA DE PAGO</Text>
+      <Text style={ms.mLabel}>Día de pago</Text>
       <View style={ms.mGrid}>
-        {WEEK_CHIPS.map(([wd, label]) => {
-          const on = start ? (payDay ?? weekdayOf(start)) === wd : false;
-          return (
-            <TouchableOpacity key={wd} style={[ms.mChip, on && ms.mChipOn]}
-              onPress={() => setPayDay(start && wd === weekdayOf(start) ? null : wd)}>
-              <Text style={[ms.mChipTxt, on && ms.mChipTxtOn]}>{label}</Text>
-            </TouchableOpacity>
-          );
-        })}
+        {WEEK_CHIPS.map(([wd, label]) => (
+          <Chip key={wd} label={label} selected={start ? (payDay ?? weekdayOf(start)) === wd : false}
+            onPress={() => setPayDay(start && wd === weekdayOf(start) ? null : wd)} />
+        ))}
       </View>
       <Text style={ms.mHint}>{payDayHint(start, payDay, Number(fee), arrears)}</Text>
 
-      <Text style={ms.mLabel}>¿CUÁNDO PAGA?</Text>
+      <Text style={ms.mLabel}>¿Cuándo paga?</Text>
       <View style={ms.mGrid}>
-        <TouchableOpacity style={[ms.mChip, arrears && ms.mChipOn]} onPress={() => setArrears(true)}>
-          <Text style={[ms.mChipTxt, arrears && ms.mChipTxtOn]}>Al terminar la semana</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={[ms.mChip, !arrears && ms.mChipOn]} onPress={() => setArrears(false)}>
-          <Text style={[ms.mChipTxt, !arrears && ms.mChipTxtOn]}>Por adelantado</Text>
-        </TouchableOpacity>
+        <Chip label="Al terminar la semana" selected={arrears} onPress={() => setArrears(true)} />
+        <Chip label="Por adelantado" selected={!arrears} onPress={() => setArrears(false)} />
       </View>
 
-      <Text style={ms.mLabel}>KILOMETRAJE AL ENTREGARLO</Text>
-      <TextInput style={ms.mInput} value={showNum(startKm)} onChangeText={t => setStartKm(digits(t))} keyboardType="number-pad" placeholder="Lo que marca el tablero" placeholderTextColor="#444" />
+      <Text style={ms.mLabel}>Kilometraje al entregarlo</Text>
+      <TextInput style={ms.mInput} value={showNum(startKm)} onChangeText={t => setStartKm(digits(t))} keyboardType="number-pad" placeholder="Lo que marca el tablero" placeholderTextColor={C.textFaint} />
 
-      <Text style={ms.mLabel}>KM INCLUIDOS</Text>
+      <Text style={ms.mLabel}>Km incluidos</Text>
       <View style={ms.mRow}>
-        <TextInput style={ms.mSmallInput} value={kmWeek} onChangeText={t => setKmWeek(digits(t))} keyboardType="number-pad" placeholder="Sin límite" placeholderTextColor="#444" />
+        <TextInput style={ms.mSmallInput} value={kmWeek} onChangeText={t => setKmWeek(digits(t))} keyboardType="number-pad" placeholder="Sin límite" placeholderTextColor={C.textFaint} />
         <Text style={rs.rowLabel}>km por semana</Text>
       </View>
       <View style={ms.mRow}>
-        <TextInput style={ms.mSmallInput} value={showNum(kmPrice)} onChangeText={t => setKmPrice(digits(t))} keyboardType="number-pad" placeholder="0" placeholderTextColor="#444" />
+        <TextInput style={ms.mSmallInput} value={showNum(kmPrice)} onChangeText={t => setKmPrice(digits(t))} keyboardType="number-pad" placeholder="0" placeholderTextColor={C.textFaint} />
         <Text style={rs.rowLabel}>pesos por km de más</Text>
       </View>
       <Text style={ms.mHint}>Vacío = sin límite de km.</Text>
 
-      <Text style={ms.mLabel}>MORA POR DÍA DE ATRASO</Text>
-      <TextInput style={ms.mInput} value={showNum(lateFee)} onChangeText={t => setLateFee(digits(t))} keyboardType="number-pad" placeholder="$ 0" placeholderTextColor="#444" />
+      <Text style={ms.mLabel}>Mora por día de atraso</Text>
+      <TextInput style={ms.mInput} value={showNum(lateFee)} onChangeText={t => setLateFee(digits(t))} keyboardType="number-pad" placeholder="$ 0" placeholderTextColor={C.textFaint} />
       <Text style={ms.mHint}>Déjalo en $0 si el contrato no cobra mora. Si la cobra, se suma después de la gracia, máximo {MAX_LATE_DAYS} días por cada cuota. Desde el día {RECOVER_DAY} de atraso el contrato permite recoger el carro.</Text>
 
-      <Text style={ms.mLabel}>DEPÓSITO</Text>
-      <TextInput style={ms.mInput} value={showNum(deposit)} onChangeText={t => setDeposit(digits(t))} keyboardType="number-pad" placeholder="$ 0" placeholderTextColor="#444" />
+      <Text style={ms.mLabel}>Depósito</Text>
+      <TextInput style={ms.mInput} value={showNum(deposit)} onChangeText={t => setDeposit(digits(t))} keyboardType="number-pad" placeholder="$ 0" placeholderTextColor={C.textFaint} />
       <Text style={ms.mHint}>Puede pagarlo por partes: cada abono se anota en Registrar pago → Depósito.</Text>
 
-      <Text style={ms.mLabel}>NOTA (opcional)</Text>
-      <TextInput style={rs.noteInput} value={note} onChangeText={setNote} placeholder="Ej: descansa los domingos" placeholderTextColor="#444" multiline />
+      <Text style={ms.mLabel}>Nota (opcional)</Text>
+      <TextInput style={[ms.mInput, rs.note]} value={note} onChangeText={setNote} placeholder="Ej.: descansa los domingos" placeholderTextColor={C.textFaint} multiline />
 
       {canDelete && (
-        <TouchableOpacity onPress={handleDelete}>
-          <Text style={ms.deleteTxt}>Borrar este contrato</Text>
-        </TouchableOpacity>
+        <Button label="Borrar este contrato" icon="trash-can-outline" variant="text" tone="spend" onPress={handleDelete} />
       )}
     </SheetFrame>
   );
@@ -428,30 +434,28 @@ function PaymentModal({ vehicle, rental, payments, onClose, onSaved }: {
   };
 
   return (
-    <SheetFrame title="Registrar pago" onClose={onClose} onSave={handleSave}>
+    <SheetFrame title="Registrar pago" onClose={onClose} onSave={handleSave} saveLabel="Guardar pago">
       <Text style={ms.mVehicle}>{rental.driver_name} · {vehicle.name}</Text>
 
-      <Text style={ms.mLabel}>¿QUÉ TE PAGÓ?</Text>
+      <Text style={ms.mLabel}>¿Qué te pagó?</Text>
       <View style={ms.mGrid}>
         {PAYMENT_KINDS.map(k => (
-          <TouchableOpacity key={k.id} style={[ms.mChip, kind === k.id && ms.mChipOn]} onPress={() => pick(k.id)}>
-            <Text style={[ms.mChipTxt, kind === k.id && ms.mChipTxtOn]}>{k.icon} {k.label}</Text>
-          </TouchableOpacity>
+          <Chip key={k.id} label={`${k.icon} ${k.label}`} selected={kind === k.id} onPress={() => pick(k.id)} />
         ))}
       </View>
 
       {kind === 'credit' ? (
         <>
-          <Text style={ms.mLabel}>¿CUÁNTOS DÍAS NO SE COBRAN?</Text>
+          <Text style={ms.mLabel}>¿Cuántos días no se cobran?</Text>
           <View style={ms.mRow}>
-            <TextInput style={ms.mSmallInput} value={days} onChangeText={t => setDays(digits(t))} keyboardType="number-pad" placeholder="0" placeholderTextColor="#444" />
+            <TextInput style={ms.mSmallInput} value={days} onChangeText={t => setDays(digits(t))} keyboardType="number-pad" placeholder="0" placeholderTextColor={C.textFaint} />
             <Text style={rs.rowLabel}>días = {formatCurrency(creditAmount)}</Text>
           </View>
         </>
       ) : (
         <>
-          <Text style={ms.mLabel}>¿CUÁNTO?</Text>
-          <TextInput style={ms.mBigInput} value={showNum(amount)} onChangeText={t => setAmount(digits(t))} keyboardType="number-pad" placeholder="$ 0" placeholderTextColor="#444" />
+          <Text style={ms.mLabel}>¿Cuánto?</Text>
+          <TextInput style={ms.mBigInput} value={showNum(amount)} onChangeText={t => setAmount(digits(t))} keyboardType="number-pad" placeholder="$ 0" placeholderTextColor={C.textFaint} />
         </>
       )}
       <Text style={ms.mHint}>
@@ -463,11 +467,11 @@ function PaymentModal({ vehicle, rental, payments, onClose, onSaved }: {
         {kind === 'credit' && 'Días que el contrato no cobra: carro inmovilizado por D12 o por documentos del carro, o más de 24 horas en el taller por mantenimiento o por un choque que no fue culpa suya. Se descuentan de lo que debe. No es ingreso ni sale en Hoy.'}
       </Text>
 
-      <Text style={ms.mLabel}>{kind === 'credit' ? 'FECHA' : 'FECHA DEL PAGO'}</Text>
+      <Text style={ms.mLabel}>{kind === 'credit' ? 'Fecha' : 'Fecha del pago'}</Text>
       <DateField value={date} onChange={setDate} />
 
-      <Text style={ms.mLabel}>NOTA (opcional)</Text>
-      <TextInput style={rs.noteInput} value={note} onChangeText={setNote} placeholder={kind === 'credit' ? 'Ej: inmovilizado por D12' : 'Ej: pagó por Nequi'} placeholderTextColor="#444" multiline />
+      <Text style={ms.mLabel}>Nota (opcional)</Text>
+      <TextInput style={[ms.mInput, rs.note]} value={note} onChangeText={setNote} placeholder={kind === 'credit' ? 'Ej.: inmovilizado por D12' : 'Ej.: pagó por Nequi'} placeholderTextColor={C.textFaint} multiline />
     </SheetFrame>
   );
 }
@@ -518,14 +522,14 @@ function EndRentalModal({ vehicle, rental, payments, onClose, onSaved }: {
   };
 
   return (
-    <SheetFrame title="Devolución" onClose={onClose} onSave={handleSave} saveLabel="TERMINAR ARRIENDO">
+    <SheetFrame title="Devolución" onClose={onClose} onSave={handleSave} saveLabel="Terminar arriendo" saveTone="spend">
       <Text style={ms.mVehicle}>{rental.driver_name} · {vehicle.name}</Text>
 
-      <Text style={ms.mLabel}>¿QUÉ DÍA TE LO DEVOLVIÓ?</Text>
+      <Text style={ms.mLabel}>¿Qué día te lo devolvió?</Text>
       <DateField value={date} onChange={setDate} />
 
-      <Text style={ms.mLabel}>KILOMETRAJE AL RECIBIRLO</Text>
-      <TextInput style={ms.mInput} value={showNum(endKm)} onChangeText={t => setEndKm(digits(t))} keyboardType="number-pad" placeholder="Lo que marca el tablero" placeholderTextColor="#444" />
+      <Text style={ms.mLabel}>Kilometraje al recibirlo</Text>
+      <TextInput style={ms.mInput} value={showNum(endKm)} onChangeText={t => setEndKm(digits(t))} keyboardType="number-pad" placeholder="Lo que marca el tablero" placeholderTextColor={C.textFaint} />
 
       <View style={rs.tipBox}>
         <Text style={rs.tipTitle}>Cómo queda la cuenta</Text>
@@ -538,14 +542,10 @@ function EndRentalModal({ vehicle, rental, payments, onClose, onSaved }: {
 
       {unused > 0 && (
         <>
-          <Text style={ms.mLabel}>¿LE DEVUELVES LOS DÍAS QUE NO USÓ?</Text>
+          <Text style={ms.mLabel}>¿Le devuelves los días que no usó?</Text>
           <View style={ms.mGrid}>
-            <TouchableOpacity style={[ms.mChip, refund === true && ms.mChipOn]} onPress={() => setRefund(true)}>
-              <Text style={[ms.mChipTxt, refund === true && ms.mChipTxtOn]}>Sí, {formatCurrency(unused)}</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={[ms.mChip, refund === false && ms.mChipOn]} onPress={() => setRefund(false)}>
-              <Text style={[ms.mChipTxt, refund === false && ms.mChipTxtOn]}>No</Text>
-            </TouchableOpacity>
+            <Chip label={`Sí, ${formatCurrency(unused)}`} selected={refund === true} onPress={() => setRefund(true)} />
+            <Chip label="No" selected={refund === false} onPress={() => setRefund(false)} />
           </View>
           <Text style={ms.mHint}>
             Según el contrato (cláusula 20f) se devuelven si terminó en la prueba, con aviso de 15 días, o porque tú
@@ -555,8 +555,8 @@ function EndRentalModal({ vehicle, rental, payments, onClose, onSaved }: {
         </>
       )}
 
-      <Text style={ms.mLabel}>¿CUÁNTO DEL DEPÓSITO LE DEVUELVES?</Text>
-      <TextInput style={ms.mInput} value={showNum(back)} onChangeText={t => setBack(digits(t))} keyboardType="number-pad" placeholder="$ 0" placeholderTextColor="#444" />
+      <Text style={ms.mLabel}>¿Cuánto del depósito le devuelves?</Text>
+      <TextInput style={ms.mInput} value={showNum(back)} onChangeText={t => setBack(digits(t))} keyboardType="number-pad" placeholder="$ 0" placeholderTextColor={C.textFaint} />
       <Text style={ms.mHint}>
         Antes de devolverlo revisa multas en el SIMIT (pueden llegar semanas después) y descuenta daños y lo que deba.
         {kept > 0 ? ` Te quedas con ${formatCurrency(kept)}: se anota como ingreso 🔑.` : ''}
@@ -567,39 +567,18 @@ function EndRentalModal({ vehicle, rental, payments, onClose, onSaved }: {
 }
 
 const rs = StyleSheet.create({
-  section:      { backgroundColor: '#1a1a1a', borderRadius: 18, padding: 16, marginBottom: 14 },
-  sectionTitle: { color: '#888', fontSize: 12, letterSpacing: 1, fontWeight: '600', marginBottom: 8 },
-  startBtn:     { backgroundColor: '#1a1a1a', borderRadius: 14, padding: 14, marginBottom: 14, borderWidth: 1.5, borderColor: '#FFC107' },
-  startTxt:     { color: '#FFC107', fontSize: 15, fontWeight: '700' },
-  startSub:     { color: '#666', fontSize: 12, marginTop: 2 },
-  driverRow:    { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
-  driver:       { color: '#fff', fontSize: 18, fontWeight: '700', flex: 1 },
-  phone:        { color: '#00C853', fontSize: 14, fontWeight: '600' },
-  terms:        { color: '#888', fontSize: 13, marginTop: 4, marginBottom: 12 },
-  statusBox:    { borderRadius: 12, borderWidth: 1.5, padding: 12, marginBottom: 12, backgroundColor: '#121212' },
-  statusTxt:    { fontSize: 16, fontWeight: '800' },
-  statusSub:    { color: '#aaa', fontSize: 13, marginTop: 4, lineHeight: 18 },
-  line:         { color: '#aaa', fontSize: 14, paddingVertical: 3 },
-  lineDim:      { color: '#666', fontSize: 13, paddingVertical: 3 },
-  warn:         { color: '#FFC107' },
-  bad:          { color: '#F44336' },
-  payBtn:       { backgroundColor: '#00C853', borderRadius: 16, height: 56, alignItems: 'center', justifyContent: 'center', marginTop: 12 },
-  payTxt:       { color: '#fff', fontSize: 17, fontWeight: '800' },
-  payRow:       { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 10, borderBottomColor: '#262626', borderBottomWidth: 1 },
-  payIcon:      { fontSize: 20 },
-  payTitle:     { color: '#fff', fontSize: 14, fontWeight: '600' },
-  paySub:       { color: '#888', fontSize: 12, marginTop: 2 },
-  payAmt:       { color: '#00C853', fontSize: 14, fontWeight: '700' },
-  hint:         { color: '#444', fontSize: 11, textAlign: 'center', marginTop: 8 },
-  btnRow:       { flexDirection: 'row', gap: 10, marginTop: 14 },
-  smallBtn:     { flex: 1, borderRadius: 12, borderWidth: 1.5, borderColor: '#555', paddingVertical: 10, alignItems: 'center' },
-  smallBtnTxt:  { color: '#aaa', fontSize: 14, fontWeight: '600' },
+  statusBox: { borderRadius: R.md, borderWidth: 1.5, padding: S.md, marginTop: S.md, gap: S.xs, backgroundColor: C.bg },
+  facts:     { marginTop: S.md, gap: S.sm },
+  fact:      { flexDirection: 'row', alignItems: 'center', gap: S.sm },
+  payRow:    { flexDirection: 'row', alignItems: 'center', gap: S.md, minHeight: 60 },
+  divider:   { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: C.outline },
+  glyph:     { fontSize: 20, width: 28, textAlign: 'center' },
+  btnRow:    { gap: S.sm, marginTop: S.lg },
 
   // Formularios
-  tipBox:       { backgroundColor: '#1a1a00', borderRadius: 14, padding: 14, marginBottom: 22 },
-  tipTitle:     { color: '#FFC107', fontSize: 14, fontWeight: '700', marginBottom: 6 },
-  tipTxt:       { color: '#aaa', fontSize: 13, lineHeight: 20 },
-  textInput:    { backgroundColor: '#1e1e1e', borderRadius: 14, padding: 16, color: '#fff', fontSize: 17, marginBottom: 14 },
-  rowLabel:     { color: '#aaa', fontSize: 15, flex: 1 },
-  noteInput:    { backgroundColor: '#1e1e1e', borderRadius: 14, padding: 16, color: '#fff', fontSize: 15, minHeight: 80, textAlignVertical: 'top', marginBottom: 14 },
+  tipBox:    { backgroundColor: C.warnContainer, borderRadius: R.md, padding: S.md, marginBottom: S.xl },
+  tipTitle:  { ...T.label, color: C.warn, marginBottom: S.xs },
+  tipTxt:    { ...T.bodySm, color: C.text },
+  rowLabel:  { ...T.body, color: C.textMuted, flex: 1 },
+  note:      { fontSize: 16, fontWeight: '400', minHeight: 88, textAlignVertical: 'top', paddingTop: S.md },
 });
