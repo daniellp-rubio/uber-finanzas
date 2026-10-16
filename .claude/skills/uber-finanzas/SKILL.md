@@ -96,6 +96,7 @@ Mientras el paso de configuración inicial no esté completo (tabla en `referenc
 | Copia de seguridad, resumen de ingresos en PDF | `src/backupData.ts` (sin nativos), `src/backup.ts`, `src/incomeReport.ts`, `src/pdf.ts`, `components/MyDataSection.tsx` |
 | Horas trabajadas, $/hora, resumen por WhatsApp | `src/workStats.ts`, `src/summary.ts`, `components/HistoryScreen.tsx` |
 | Arriendo: saldo, mora, km, cuánto deja o cuesta el carro | `src/rental.ts` (cálculos), `components/RentalSection.tsx`, `components/VehicleEconomics.tsx` |
+| Plata del papá en el Bancolombia de Dafel, préstamos de Dafel | `src/dafelAccount.ts` (cálculo), `components/DafelAccount.tsx`, tabla `dafel_moves` en `src/db.ts` |
 | Moneda y fechas | `src/format.ts` |
 | Recordatorios de jornada, avisos de carros y de copia de seguridad | `src/notifications.ts` |
 | OTA al arrancar, chequeo de APK nuevo, etiqueta de versión | `src/updates.ts` |

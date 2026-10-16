@@ -31,7 +31,7 @@ export function nextBackupReminder(now: Date, today: string): Date {
 export const BACKUP_TABLES = [
   'transactions', 'fixed_expenses', 'debts', 'funds', 'fund_movements', 'app_settings',
   'vehicles', 'maintenance', 'maintenance_plan', 'vehicle_docs', 'rentals', 'rental_payments',
-  'charges', 'work_sessions',
+  'charges', 'work_sessions', 'dafel_moves',
 ] as const;
 
 type Value = string | number | null;
