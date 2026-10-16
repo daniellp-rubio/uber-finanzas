@@ -7,6 +7,8 @@ import { RENT_CATEGORY } from '../src/categories';
 import { C, T, S, R } from '../src/theme';
 import { Amount, Button, Hint, IconButton, Row, Section } from './ui';
 import SheetFrame, { ms, MoneyField } from './SheetFrame';
+import DafelAccountModal, { DafelAccountCard, loadDafelAccount } from './DafelAccount';
+import type { DafelAccount } from '../src/dafelAccount';
 
 // ─── Agregar o usar plata de un fondo ─────────────────────────────────────────
 
@@ -128,9 +130,12 @@ export default function FundsScreen() {
   const [funds, setFunds]       = useState<Fund[]>([]);
   const [selected, setSelected] = useState<Fund | null>(null);
   const [todayDrive, setDrive]  = useState(0);
+  const [dafel, setDafel]       = useState<DafelAccount | null>(null);
+  const [showDafel, setShowDafel] = useState(false);
 
   const load = useCallback(() => {
     setFunds(getFunds());
+    setDafel(loadDafelAccount());
     // Lo ganado manejando hoy, para las sugerencias de cuánto separar
     setDrive(getTransactionsByDate(todayString())
       .filter(t => t.type === 'income' && t.category !== RENT_CATEGORY)
@@ -149,6 +154,8 @@ export default function FundsScreen() {
       </View>
 
       <ScrollView contentContainerStyle={s.scroll}>
+        {dafel && <DafelAccountCard account={dafel} onPress={() => setShowDafel(true)} />}
+
         <View style={s.hero}>
           <Text style={T.label}>Total separado</Text>
           <Text style={T.display}>{formatCurrency(totalSaved)}</Text>
@@ -193,6 +200,15 @@ export default function FundsScreen() {
             }}
           />
         )}
+      </Modal>
+
+      <Modal
+        visible={showDafel}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={() => setShowDafel(false)}
+      >
+        {showDafel && <DafelAccountModal onClose={() => setShowDafel(false)} onChanged={load} />}
       </Modal>
     </View>
   );

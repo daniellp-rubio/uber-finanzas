@@ -34,7 +34,9 @@ components/
                          pico y placa, DianSection, MyDataSection, config Uber (Pass / comisión)
   DianSection.tsx        Renta del año (DIAN 2026) proyectada con lo anotado
   MyDataSection.tsx      Copia de seguridad (guardar / recuperar) y resumen de ingresos en PDF (IncomePdfModal)
-  FundsScreen.tsx        Tab "Fondos": sobres virtuales (incluye FundActionModal y FundDetailModal internos)
+  FundsScreen.tsx        Tab "Fondos": tarjeta "Bancolombia de Dafel" arriba + sobres virtuales (incluye FundActionModal y FundDetailModal internos)
+  DafelAccount.tsx       Plata del papá en el Bancolombia de Dafel: tarjeta para Fondos (DafelAccountCard) y detalle (saldo, Uber pagó,
+                         Dafel te pasó, préstamos con "Ya le pagué", movimientos); loadDafelAccount() lee la DB
   VehiclesScreen.tsx     Tab "Carros": lista → detalle (vista dentro del tab, no Modal; el botón atrás de Android vuelve).
                          Internos: DocModal (vencimientos), PlanModal (cada cuánto), OdometerModal
   RentalSection.tsx      Sección "Arriendo" del detalle: estado de pagos, depósito, km, pagos.
@@ -56,6 +58,7 @@ src/
   theme.ts               Tokens del tema: colores C, tipografía T, espacios S, radios R, TOUCH (48 dp)
   financeCalc.ts         computeBalance(): objetivo diario y semáforo del mes; calcDailyGoal(): meta del día (Hoy y Balance);
                          mechanicShare(): lo del mecánico para "Me queda"
+  dafelAccount.ts        Puro: saldo con Dafel (movimientos + cargas desde el saldo inicial), préstamos pendientes, lista de movimientos
   workStats.ts           Puro: jornadas → días de trabajo → ganancia por hora (total, día/noche, por día de la semana)
   summary.ts             Texto del resumen para WhatsApp
   dian.ts                Renta: UVT 2026, tabla art. 241, topes para declarar, proyección del año (projectYear)
@@ -92,19 +95,21 @@ assets/                  icon, adaptive-icon, splash-icon, favicon
 | `rentals` (v2; `first_pay_date` v4; `in_arrears` v5) | id, vehicle_id, driver_name, driver_phone, weekly_fee, start_date, first_pay_date (NULL = paga el día de la semana de la entrega), in_arrears (0 = por adelantado, 1 = semana vencida), start_km, km_per_week (NULL = sin límite), extra_km_price, late_fee_per_day, deposit, end_date (NULL = vigente), deposit_returned, note, active | lógico (solo contrato sin pagos); terminar = `end_date` |
 | `rental_payments` (v2) | id, rental_id, kind (`rent`/`fee`/`deposit`/`credit`), amount, date, note, transaction_id (ingreso `rent` creado con él; NULL en depósito y en `credit`), active | lógico; borra su ingreso (físico) |
 | `charges` (v3) | id, vehicle_id, date, kwh (NULL = no lo anotó), amount, place, transaction_id (gasto `charge` creado con ella), active | se borra borrando su gasto en Hoy (`getCharges` hace JOIN con `transactions`) |
+| `dafel_moves` (v6) | id, kind (`start`/`uber`/`out`/`loan`/`loan_paid`), amount (siempre positivo), date, note, loan_id (en `loan_paid`), active | lógico; borrar un `loan` borra sus `loan_paid` |
 | `work_sessions` (v3) | id, start_at, end_at (NULL = no tocó "Día finalizado"), hora local `YYYY-MM-DD HH:MM` | nunca |
 
-- Índices: `idx_date` sobre `transactions(date)`, `idx_maintenance_vehicle` sobre `maintenance(vehicle_id)`, `idx_rentals_vehicle`, `idx_rental_payments_rental`, `idx_charges_vehicle` sobre `charges(vehicle_id, date)`.
+- Índices: `idx_date` sobre `transactions(date)`, `idx_maintenance_vehicle` sobre `maintenance(vehicle_id)`, `idx_rentals_vehicle`, `idx_rental_payments_rental`, `idx_charges_vehicle` sobre `charges(vehicle_id, date)`, `idx_dafel_moves_loan` sobre `dafel_moves(loan_id)`.
 - Semilla: si `funds` está vacía se crean Emergencias, Mecánico, Multas/Legal, Pensión.
 - Claves de `app_settings`: `uber_commission_pct`, `uber_pass_active` (`'1'`/`'0'`, default `'1'`), `uber_pass_price_cop` (default 90000), `active_vehicle_id` (el carro que maneja el usuario), `last_backup_date`, `backup_reminder_since`, `maint_saved_today` (`fecha|monto` separado hoy para el mecánico), `owner_name` y `owner_id` (para el PDF). Una clave nueva no es cambio de esquema: `getSetting` devuelve el default si no existe.
 - Claves **heredadas**: `km_per_gallon`, `gas_price_cop`, `pico_placa_days_week`, `maintenance_cost_per_km`. El JS actual ya no las usa; siguen ahí para el JS viejo si hay rollback de OTA. La migración 1 las copió al carro sembrado.
 - `funds.balance` es un acumulado desnormalizado: `addFundMovement` inserta el movimiento y suma al balance (dos sentencias, sin transacción).
-- **Migraciones con `PRAGMA user_version`** (`MIGRATIONS` en `db.ts`; `runMigrations` corre al final de `initDatabase`). Versión actual: **5**. El bloque `CREATE TABLE IF NOT EXISTS` inicial solo cubre las tablas originales.
+- **Migraciones con `PRAGMA user_version`** (`MIGRATIONS` en `db.ts`; `runMigrations` corre al final de `initDatabase`). Versión actual: **6**. El bloque `CREATE TABLE IF NOT EXISTS` inicial solo cubre las tablas originales.
   - 1: carros, mantenimientos, vencimientos. Siembra "Renault Duster" con la config que el usuario tenía (gasolina, mantenimiento por km) y pico y placa 1, y lo deja como carro activo.
   - 2: arriendo (`rentals`, `rental_payments`) y costos fijos por carro (`vehicles.debt_id`, `vehicles.extra_monthly_cost`, con `ALTER TABLE ADD COLUMN`).
   - 3: cargas del eléctrico (`charges`) y jornadas (`work_sessions`).
   - 4: `rentals.first_pay_date` (día de pago distinto al de la entrega), con `ALTER TABLE ADD COLUMN`, nullable.
   - 5: `rentals.in_arrears INTEGER NOT NULL DEFAULT 0` (canon por semana vencida); los contratos existentes siguen por adelantado.
+  - 6: `dafel_moves` (cuenta con Dafel). Además, una sola vez: si el carro activo no es eléctrico y hay exactamente un eléctrico sin arrendar, ese pasa a ser el activo (el papá maneja la BYD desde el 2026-10-15), y con el activo eléctrico los gastos `gas` con fecha ≥ `2026-10-15` pasan a `charge`. Si la BYD no estaba registrada, no cambia nada.
 - **Tabla nueva ⇒ agrégala a `BACKUP_TABLES`** en `backupData.ts`; si no, la copia de seguridad no la guarda y restaurar la deja vacía.
 
 ### Cambios de esquema (obligatorio leer antes de tocar `db.ts`)
@@ -150,6 +155,7 @@ El celular del usuario ya tiene datos reales. Una migración mala = datos perdid
 - **Energía por km** (`energyCostPerKm`): gasolina = precio galón / km por galón; eléctrico = kWh cada 100 km / 100 × precio kWh (BYD: 17,5 × $1.815 ≈ $318/km con electrolinera; el precio real de las cargas anotadas reemplaza al del carro).
 - **Me queda (Hoy)** = ingresos del día − gastos del día − lo del mecánico (`mechanicShare`). Lo del mecánico sale solo de lo ganado manejando (sin el arriendo 🔑): con km del día escritos (setting `km_today` = "fecha|km") = km × mantenimiento por km del carro activo; sin km = `MECHANIC_PCT` (10 %) de lo ganado manejando (decisión de Dafel, 2026-10-13). Gasolina, carga y Uber Pass no se estiman: ya se anotan como gastos. "Separar" pasa la diferencia al fondo Mecánico (`maint_saved_today`).
 - **Deudas pagadas del mes**: "Ya pagué <mes>" llama `decrementDebtMonth` y guarda `debt_paid_<id>` = "YYYY-MM" en `app_settings`; con ese mes marcado ya no se ofrece (evita descontar dos veces). Sin cambio de esquema.
+- **Cuenta con Dafel** (`dafelAccount.ts`, pedido de Dafel 2026-10-15): Uber le paga al papá en el Bancolombia de Dafel y **todas** las ⚡ Cargas se pagan con la tarjeta de crédito de Dafel (Puntos Colombia). Saldo = saldo inicial (`start`, uno solo; su fecha es el punto de partida) + `uber` (él anota cada pago de Uber) − `out` ("Dafel te pasó") − `loan_paid` − gastos `charge` con fecha ≥ la del saldo inicial (se leen de `transactions`: borrar la carga en Hoy la saca). Lo anterior al saldo inicial no cuenta. Un `loan` ("Dafel te prestó") no mueve el saldo: queda pendiente y "Ya le pagué" crea un `loan_paid` (abono ≤ lo pendiente) que sí lo resta. Saldo negativo = "Le debes a Dafel". No toca Hoy, Balance, DIAN ni Historial: las cargas ya son gastos. Solo el papá anota, en su celular (sin sincronizar).
 - **Efectivo** (solo sin Uber Pass): al guardar un ingreso en efectivo se crea también un gasto `other` por la comisión Uber (`Comisión Uber en efectivo (X%)`). Con Uber Pass el interruptor de efectivo no se muestra.
 - **Pico y placa**: del carro activo. Días bloqueados = días/semana × (días del mes / 7); pérdida = días bloqueados × promedio diario. Con 0 días (eléctrico), Balance dice que el carro no tiene pico y placa. Duster en Medellín: 1 día (decisión de Dafel, 2026-09-22).
 - **Mantenimiento** (`fleet.ts`): cada `maintenance_plan` dice cada cuánto (km y/o meses; lo que pase primero). Próximo = último registro de ese tipo + intervalo. Amarillo a ≤ 30 días o ≤ 1.000 km; rojo si se pasó. Sin registro = "Registra el último que le hiciste" (sin aviso). Un carro nuevo trae plan: gasolina 10.000 km / 12 meses (Renault), eléctrico 12.000 km / 12 meses (plan del concesionario BYD-Motorysa, que manda para la garantía; el manual dice 20.000, se usa el menor). Mantenimiento por km típico: gasolina 80, eléctrico 150 (servicio + alineación + llantas; ver deuda #5).

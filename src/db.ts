@@ -154,6 +154,29 @@ export interface WorkSession {
   end_at: string | null;
 }
 
+// Cuenta con Dafel: parte de la plata del papá está en el Bancolombia de Dafel (ahí le paga Uber).
+// start = saldo inicial (fecha desde la que se restan las cargas), uber = Uber pagó (+),
+// out = Dafel le pasó plata (−), loan = Dafel le prestó (no mueve el saldo, queda debiendo),
+// loan_paid = pagó un préstamo (−, con loan_id)
+export type DafelMoveKind = 'start' | 'uber' | 'out' | 'loan' | 'loan_paid';
+
+export interface DafelMove {
+  id: number;
+  kind: DafelMoveKind;
+  amount: number;
+  date: string;
+  note: string | null;
+  loan_id: number | null;
+}
+
+// Gasto ⚡ Carga: todas se pagan con la tarjeta de crédito de Dafel
+export interface ChargeExpense {
+  id: number;
+  amount: number;
+  date: string;
+  note: string | null;
+}
+
 // ─── Singleton ───────────────────────────────────────────────────────────────
 
 let _db: SQLite.SQLiteDatabase | null = null;
@@ -375,6 +398,46 @@ const MIGRATIONS: ((db: SQLite.SQLiteDatabase) => void)[] = [
 
   /* 5: canon por semana vencida */ db => {
     db.execSync('ALTER TABLE rentals ADD COLUMN in_arrears INTEGER NOT NULL DEFAULT 0;');
+  },
+
+  /* 6: cuenta con Dafel; desde el 15-oct-2026 el papá maneja la BYD */ db => {
+    db.execSync(`
+      CREATE TABLE IF NOT EXISTS dafel_moves (
+        id      INTEGER PRIMARY KEY AUTOINCREMENT,
+        kind    TEXT    NOT NULL,
+        amount  REAL    NOT NULL,
+        date    TEXT    NOT NULL,
+        note    TEXT,
+        loan_id INTEGER,
+        active  INTEGER NOT NULL DEFAULT 1
+      );
+      CREATE INDEX IF NOT EXISTS idx_dafel_moves_loan ON dafel_moves(loan_id);
+    `);
+
+    // El carro que maneja (igual que getActiveVehicle: si no existe, el primero)
+    const activeEnergy = (): string | undefined => {
+      const id = Number(db.getFirstSync<{ value: string }>(
+        "SELECT value FROM app_settings WHERE key = 'active_vehicle_id'")?.value ?? 0);
+      return (db.getFirstSync<{ energy: string }>('SELECT energy FROM vehicles WHERE id = ? AND active = 1', id)
+        ?? db.getFirstSync<{ energy: string }>('SELECT energy FROM vehicles WHERE active = 1 ORDER BY id ASC'))?.energy;
+    };
+    // Si sigue la Duster y hay un solo eléctrico sin arrendar, ese pasa a ser el que maneja
+    if (activeEnergy() !== 'electric') {
+      const evs = db.getAllSync<{ id: number }>(
+        `SELECT v.id FROM vehicles v
+         WHERE v.active = 1 AND v.energy = 'electric' AND NOT EXISTS (
+           SELECT 1 FROM rentals r WHERE r.vehicle_id = v.id AND r.active = 1 AND r.end_date IS NULL)`
+      );
+      if (evs.length === 1) {
+        db.runSync("INSERT OR REPLACE INTO app_settings (key, value) VALUES ('active_vehicle_id', ?)", String(evs[0].id));
+      }
+    }
+    // Lo anotado como ⛽ Gasolina desde ese día fue carga de la BYD
+    if (activeEnergy() === 'electric') {
+      db.runSync(
+        "UPDATE transactions SET category = 'charge' WHERE type = 'expense' AND category = 'gas' AND date >= '2026-10-15'"
+      );
+    }
   },
 ];
 
@@ -882,6 +945,45 @@ export function getCharges(vehicleId: number, from: string): Charge[] {
      ORDER BY c.date DESC, c.id DESC`,
     vehicleId, from
   );
+}
+
+// Gastos ⚡ Carga desde una fecha (incluida). Se leen del gasto: si se borra en Hoy, deja de contar.
+export function getChargeExpensesSince(from: string): ChargeExpense[] {
+  return getDb().getAllSync<ChargeExpense>(
+    `SELECT id, amount, date, note FROM transactions
+     WHERE type = 'expense' AND category = ? AND date >= ?
+     ORDER BY date DESC, id DESC`,
+    CHARGE_CATEGORY, from
+  );
+}
+
+// ─── Cuenta con Dafel ─────────────────────────────────────────────────────────
+
+export function getDafelMoves(): DafelMove[] {
+  return getDb().getAllSync<DafelMove>(
+    'SELECT id, kind, amount, date, note, loan_id FROM dafel_moves WHERE active = 1 ORDER BY date DESC, id DESC'
+  );
+}
+
+export function addDafelMove(kind: DafelMoveKind, amount: number, date: string, note: string | null, loanId: number | null = null): void {
+  getDb().runSync(
+    'INSERT INTO dafel_moves (kind, amount, date, note, loan_id) VALUES (?, ?, ?, ?, ?)',
+    kind, amount, date, note, loanId
+  );
+}
+
+// Solo hay un saldo inicial: el nuevo reemplaza al anterior
+export function setDafelStart(amount: number, date: string): void {
+  const db = getDb();
+  db.withTransactionSync(() => {
+    db.runSync("UPDATE dafel_moves SET active = 0 WHERE kind = 'start'");
+    db.runSync("INSERT INTO dafel_moves (kind, amount, date) VALUES ('start', ?, ?)", amount, date);
+  });
+}
+
+// Borrar un préstamo borra también sus pagos (la plata vuelve al saldo)
+export function deleteDafelMove(id: number): void {
+  getDb().runSync('UPDATE dafel_moves SET active = 0 WHERE id = ? OR loan_id = ?', id, id);
 }
 
 // ─── Jornadas ─────────────────────────────────────────────────────────────────

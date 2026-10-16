@@ -319,7 +319,7 @@ export default function BalanceScreen() {
             accessibilityLabel={cfg.uberPassActive ? 'Valor de cada Uber Pass' : 'Comisión de Uber'}
           />
           <Button label="Guardar" onPress={saveConfig} style={{ marginTop: S.md }} />
-          <Hint>Gasolina o carga, pico y placa y mantenimiento son de cada carro: Carros → {cfg.vehicleName} → Datos del carro.</Hint>
+          <Hint>{cfg.energy === 'electric' ? 'Carga' : 'Gasolina'}, pico y placa y mantenimiento son de cada carro: Carros → {cfg.vehicleName} → Datos del carro.</Hint>
         </Collapsible>
 
         <Text style={s.version}>{versionLabel()}</Text>
